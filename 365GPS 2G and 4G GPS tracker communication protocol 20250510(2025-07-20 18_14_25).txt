@@ -1,0 +1,816 @@
+﻿Zhongxun Locator Communication Protocol
+V1.1
+1. General function
+V1.2
+1. Increased altitude 0x10, 0x11
+2. Other changes, alarms in the positioning data, etc. 0x17 0x69
+V1.3
+1. Added setting reply data
+
+Introduction
+1. This document mainly introduces the related functional protocols between the locator and the server, as well as their data formats and contents.
+2. The protocol only applies to communication between the locator and the server. The current version corresponds to May 2017. If there is any modification in the future, adjust the documentation accordingly.
+3. All communication data formats are 0x780x78+data length+protocol number+data content+0x0d0x0a, and the data length is the sum of the number of bytes occupied by the data content and the number of bytes occupied by the protocol number. A special number is not the rule, there is a corresponding description in the details of the agreement.
+4. All communication data is transmitted by tcpip protocol, the server address is ______ port is ______
+5. Some protocol data transmission is bidirectional, that is, the data is initiated by one party in the device or the server, and the receiving party must reply with a reply data corresponding to the protocol. Some protocols are one-way, that is, after the device or the server sends the data, the receiving party does not need to reply. Unless otherwise specified, the protocol data is one-way, that is, the party receiving the data does not need to reply to the data.
+6. The sample data is all hexadecimal
+7. The end of the data is 0D0A. It is necessary to pay attention to the case where the data contains the 0D0A in the middle of the data. It cannot be processed with 0D0A as the data end when the data length has not yet been reached.
+8. The data that must be replied is: 0x01, 0x10, 0x11, 0x13, 0x17, 0x18, 0x19. The data communication will be disconnected and reconnect if don't response these data.
+9. Minimum support is required to implement location functionality: 0x01 login data packet, 0x08 heartbeat data packet, 0x10GPS online location data, 0x11 GPS offline location data, 0x13 status data packet, 0x17 0x19 offline WIFILBS location data packet, 0x30 time synchronization, 0x18 online WIFILBS data packet, 0x57 Parameter setting packet(You can ignore the 0x57 data if you have difficulty in responding this data).
+
+Details
+0x01 login data
+Device sent data to the server
+Start bit 2byte Reserved bit 1byte Protocol number 1byte IMEI 8byte Software version number 1byte Stop bit 2byte
+Eg.7878 0A 01 0123456789012345 01 0D0A
+The IMEI data is BCD coded, and the IMEI data in the data packet is 0x01 0x23 0x45 0x67 0x89 0x01 0x23 0x45 , IMEI is 123456789012345
+Software version number: 01 software version number
+After server received the login data, server side must reply to the device login data.
+Start bit 2byte packet length 1byte protocol number 1byte stop bit 2byte
+If it is a legal device, it returns 0x01 protocol data. If the login fails, reply to the 0x44 protocol to prevent the device from uploading data.
+Eg.7878 01 01 0D0A successfully logged in
+   7878 01 44 0D0A login failed
+Note: The data length of this 1byte length data is not the same as the actual length. No practical significance. Please take data according to the data format
+
+
+0x05 Server sends the monitor number status to the terminal
+Start 2Byte, package content length 1Byte, protocol number 1Byte, status 1Byte, stop bit 2Byte
+7878 02 05 xx 0D0A
+
+01. Supervisory number dials the device number. The device automatically answer the phone call to hear the ambient sound.
+02. Supervisory number dials the device number Automatically answers the two-way call
+03. Regulatory number dials the device number Bells manually answer the two-way call
+
+0x08 heartbeat packet 
+Device sent data to the server
+Start bit 2byte packet length 1byte protocol number 1byte end bit 2byte
+Eg.7878 01 08 0D0A
+Used to keep the connection between the device and the server from being disconnected
+
+
+0x10 GPS positioning data packet
+Device sent data to the server
+Start bit 2byte, Packet length 1byte, Protocol number 1byte, Date time 6byte, GPS data length, visible satellite number 1byte, GPS latitude and longitude 8byte, Speed 1byte, East-West longitude North-South latitude Status Heading 2byte, Stop bit 2byte.
+(the latest version added  height and alarm information in the 0x10 data and may cause the data length changed)
+Eg.7878 12 10 0A03170F3217 9C 026B3F3E 0C22AD65 1F 3460 0D0A
+Date and time: 0A03170F3217, year, month, day, minute, second, each accounted for 1 byte, converted to 10 years, March 23, 15:50:23, year plus 2000 is 2010, time is GMT0.
+GPS data length, visible satellite number: data length and visible satellite number each accounted for 0.5byte, 9C means: GPS information length is 9, the number of positioning GPS satellites is 0x0c (12) pcs.
+GPS latitude and longitude: 026B3F3E, longitude and latitude each occupy 4bytes, indicating positioning data, latitude and longitude conversion method is as below:
+Convert the latitude and longitude values output by the gps module into fractions in minutes, then multiply the converted fractions by 30000 and convert the multiplied result to hexadecimal.
+   For example, 22"32.7658', (22X60+32.7658)X30000=40582974, converted to hexadecimal 0x02 0x6B 0x3F 0x3E, 22X60 is convert ° to '.
+GPS speed: 1 byte, indicating the running speed of GPS device, the range is 0x00-0xFF km / h. In the example, 1F indicates a speed of 31 kilometers per hour.
+North and South latitude, east and west longitude, status, heading: occupy 2 bytes, the heading indicates the running direction of GPS, 0-360, unit is degree, and North is 0. The first six bits of the first byte of the 8-bit binary represent the status, and the last two bits and the eight bits of the second byte represent the heading. As shown below
+The first byteThe second byte7654321076543210EmptyEmptyEmptyGPS Whether
+Positioning or not East-West latitudeNorth-South LatitudeCourse
+0 South latitude; 1 North latitude; 0 East longitude; 1 West longitude; 0 GPS not positioned; 1 GPS positioning.
+In the example, the state heading is 3460, which is converted to binary 0011 0100 0110 0000, indicating that the GPS is in the positioning status, East longitude, North latitude, and the heading is 96°.
+
+The server must reply:
+Start bit 2byte Reserved byte 1byte Protocol number 1byte Date time 6byte stop bit 2byte
+Eg.7878 00 10 0A03170F3217 0D0A packet length string is 00
+Note: The data length of this 1byte length data is not the same as the actual length. No practical significance. Please take the data reply data length byte 00 according to the data format. 0D0A is more likely to appear in the time data, and it needs to be judged according to the length of the data to avoid truncation errors.
+
+0x11 offline GPS positioning data package
+Same as 0x10 format
+Eg.7878 12 11 0A03170F3217 9C 026B3F3E 0C22AD65 1F 3460 0D0A
+
+The server must reply:
+Start bit 2byte reserved byte 1byte protocol number 1byte date time 6byte stop bit 2byte
+Eg.7878 00 11 0A03170F3217 0D0A packet length string is 00
+Note: The data length of this 1byte length data is not the same as the actual length. No practical significance. Please take the data in the data format. Reply data length byte 00. 0D0A is more likely to appear in the time data, and it needs to be judged according to the length of the data to avoid truncation errors.
+
+V1.2 has made changes to the positioning data. 0x10 0x11 works.
+GPS increase altitude and alarm(alert)
+7878 15 10120B05030D2498038077200BE2078F003400 XXXX FX 0D0A
+ 2Byte XXXX = hex (elevation)
+1Byte FX alert
+0000 0001 = vibration
+0000 0010 = speeding
+0000 0100 = wifi attendance
+0000 1000 = leave wifi attendance
+0001 0000 = low power alarm
+0001 0000 = on duty
+0001 0000 = off duty
+
+The same location, wifi / lbs are added FX
+The server sends a startup speed setting to the terminal.
+7878 02 86 XX 0D0A
+
+0x13 status packet
+Device sent data to the server
+Start bit 2byte Reserved byte 1byte Protocol number 1byte Battery power 1byte Software version 1byte Time zone 1byte Status packet upload interval 1byte End bit 2byte
+Eg.7878 06 13 55 23 08 03 0D0A
+55 indicates that the battery level is 85%, 23 indicates that the software version number is 35, 08 indicates that it is East 8---GMT+8 (just an integer), and 03 indicates that the status packet upload interval is 3 minutes.
+Increased signal strength
+Start bit 2byte Packet length 1byte Protocol number 1byte Battery level 1byte Software version 1byte Time zone 1byte Status packet upload interval 1byte Device signal strength 1byte End bit 2byte
+Eg.7878 07 13 55 23 08 03 64 0D0A
+0x55 indicates that the battery level is 85. 0x64 indicates device signal strength 100
+
+Server reply
+Reply content is the same as received status packet
+
+Set the status packet upload interval
+Start bit 2byte packet length 1byte protocol number 1byte status packet upload interval 1byte end bit 2byte
+This data is sent to the device by the server to set the status packet upload interval.
+Eg.7878 02 13 03 0D0A
+03 means to set the status packet upload interval to 3 minutes, the unit is minute.
+
+Set the heartbeat packet upload interval
+Start bit 2byte packet length 1byte protocol number 1byte heartbeat packet upload interval 2byte end bit 2byte
+This data is sent to the device by the server to set the upload interval of the heartbeat packet.
+Eg.7878 03 13 012C 0D0A
+012C uploads the heartbeat packet upload interval to 300 seconds, in seconds. The heartbeat packet upload interval ranges from 20 to 600 seconds.
+Note: The data length of this 1byte length data is not the same as the actual length. No practical significance. Please take the data in the data format.
+---------------------------------------------------------------------------------------------------------------------------------
+The status packet adds the function of plug-in recharging reminder
+Status pack latest 0A13 contains temperature and temperature increase after xx
+00 means not plugged in, 01 means plugged in recharging
+7878 0913 424008196400041F0D0A
+7878 0A13 424008196400041F 00 0D0A not plugged in
+7878 0A13 424008196400041F 01 0D0A Plug in usb for recharging
+
+Status packet adds heart rate reminder
+7878 0B13 424008196400041F00 XX 0D0A XX = 16 heart rate
+-------------------------------------------------- -------------------------------------------------- -----------------------------
+Equipment Send health data (This function is for 4G GPS tracker which support health monitoring only, all our 2G GPS tracker don't support this function)
+7878 0E13 424008196400 yyyy XX EEEfffff 0D0A
+yyyy = temperature; XX = hex heart rate; fffff = hex number of steps, the device automatically clears 0 in the local morning EEE = Hex timing minutes, 0 manual
+
+Server requests to refresh health data
+7878 03 54 0EEE 0D0A
+E = as above
+The device responds with the same content
+
+
+Total number of steps per day
+Start bit 2byte Data length 1byte Protocol number 1byte Date 4byte Total number of steps 3byte End bit 2byte
+eg
+7878 08 54 20200716 000000 0d0a
+08 1byte data length
+54 1byte pedometer protocol number
+20200716 4byte The date of the total number of steps
+000000 3byte Total number of steps counted that day
+
+The server replies with the same data after receiving it
+7878 08 54 20200716 000000 0d0a
+If this data is not received. It will take the maximum number of timed steps uploaded on the day as the total number of counted steps on the day.
+
+//
+7878 ##13 424008196400 yyyy  XX EEEfffff ############## 0D0A
+
+Added activity time status packet
+
+Regarding time zones with decimal timezone: 1BYTE: The low 4 bits are integer time zones, while the high 4 bits determine positive and negative time zones, plus minutes.
+High order 0 is positive 0 points, 1 is negative 0 points, 2 is positive 15 points, 3 is negative 15 points, 4 is positive 30 points, 5 is negative 30 points, 6 is positive 45 points, 7 is negative 45 points
+like this:
++8.25 the timezon is 0x28. The low bit is 8, and the high bit is 2=positive 15, so the time zone is written as 0x28
+-8.25 is 0x38: the low bit is 8, and the high bit is 3=negative 15, so the time zone is written as 0x38
++8 time zone is 0x08
+-8 can be either 0xF8 or 0x18
+Prioritize processing as integers, and if it exceeds the time zone range, follow the new rules.
+
+
+0x14 device sleep instruction
+Device sent data to the server
+Start bit 2byte packet length 1byte protocol number 1byte end bit 2byte
+Eg.7878 01 14 0D0A
+Send this command, indicating that the device will disconnect with the server and go to sleep mode.
+
+0x15 factory reset
+Bidirectional command
+After GPS device receive the SMS command for restore to factory setup, the device sends a data packet to the server.
+Start bit 2byte packet length 1byte protocol number 1byte end bit 2byte
+Eg.7878 01 15 0D0A
+Server replay the GPS device
+Start bit 2byte packet length 1byte protocol number 1byte end bit 2byte
+Eg.7878 01 15 0D0A
+The device will be restored to factory settings after receiving the command for 30 seconds.
+
+0x16 total number of whitelists
+Server sent data to device
+Start bit 2byte packet length 1byte protocol number 1byte white list number 1byte end bit 2byte
+Eg.7878 02 16 03 0D0A
+Number of whitelists: 03, 3 numbers
+After receiving this command, the device requests a whitelist synchronization to 0x58 protocol.
+
+0x17 offline wifi data
+The resolution of this protocol is the same as 0x69, indicating offline WIFI LBS location data.
+Start bit 2byte WIFI number 1byte Protocol number 1byte Date time 6byte WIFI data Length indefinite fixed format LBS data Length indefinite fixed format Stop bit 2byte
+
+Eg. 7878 00 17 170622123031 07 01cc00 11aeaad432 11aeaad432 11aeaad432 11aeaad432 11aeaad432 11aeaad432 11aeaad432 0d0a
+This is the lbs positioning without wifi
+
+The server must reply it with the protocol number plus time after receiving the data.
+Start bit 2byte reserved byte 1byte protocol number 1byte time 6byte end bit 2byte
+7878 00 17 170622123031 0d0a package length string is 00
+Note: The data of this data data length of 1byte is not the same as the actual length. Please take the data in the data format. Reply data length byte 00. 0D0A is more likely to appear in the time data, and it needs to be judged according to the length of the data to avoid truncation errors.
+
+V1.2
+Added alarm information
+Start bit 2byte WIFI number 1byte Protocol number 1byte Date time 6byte WIFI data Length indefinite fixed format LBS data Length indefinite fixed format Alarm information 1byte stop bit 2byte
+
+0x18 4G LBS WIFI data (compatible with 2G LBS wifi data)
+
+Start bit 2byte WIFI quantity 1byte Protocol number 1byte Date and time 6byte WIFI data variable length fixed format LBS data variable length fixed format alarm information 1byte stop bit 2byte
+eg. 7878 03 18 160413031849 1475905BD30E25 001E10BBF7635D 14759006E62656 04 01CC00 000028660090DF425F 000028660090DF576C 000028660094875667 00002866009CA15667 00 0D0A
+The third digit of this protocol is not the length of the data packet, but the number of WIFI hotspots. The first set of WIFI/LBS data is 03, which means that there are 3 WIFI hotspots, and the last one is LBSlbs data. If there is no WIFI hotspot, this data is 00.
+Date and time: 160413031849, this data is different from the 0x10 protocol, this is BCD encoded, and the date is April 13, 2016, 3:18:49.
+WIFI data
+The minimum number of WIFI hotspots is 3 and the maximum number is 8. If the device searches for more than 8 hotspots, only the 8 hotspots with the best signal will be selected. 1475905BD30E25 The first 6byte is bssid, and the back 1byte is rssi, then the bssid of the first WIFI hotspot is 0x14:0x75:0x90:0x5B:0xD3:0x0E, and rssi is 0x25.
+Number of LBS: 05 is the number of base stations, the minimum number of base stations is 2
+MCCMNC: mcc2byte, mnc1byte 01CC00 is 46000
+Base station data: lac4byte cellid 4byte, rssi1byte, 00002866 0090DF42 5F In the example, lac is 10342, cellid is 9494338, rssi is -95 (rssi value is negative, and the protocol upload is ABS value)
+
+
+
+
+
+
+
+Server reply:
+Start bit 2byte Reserved byte 1byte Protocol number 1byte Time 6byte End bit 2byte
+  7878 00 18 160413031849 0d0a The packet length string is 00
+
+0x19 Offline 4G LBS WIFI data (This is for 4G GPS only, ignore it for 2G GPS device)
+
+Device sent data to server
+Start bit 2byte WIFI hotspots number 1byte Protocol number 1byte Date and time 6byte WIFI data Variable length fixed format LBS data Variable length fixed format Alarm information 1byte Stop bit 2byte
+Refer to the 0x18 data format and reply, which is the same as the 0x18 data format, except that the protocol number is 0x19.
+eg. 7878 03 19 160413031849 1475905BD30E25 001E10BBF7635D 14759006E62656 04 01CC00 000028660090DF425F 000028660090DF576C 000028660094875667 00002866009CA15667 00 0D0A
+
+Server reply:
+Start bit 2byte Reserved byte 1byte Protocol number 1byte Time 6byte End bit 2byte
+  7878 00 19 160413031849 0d0a The packet length string is 00
+
+0x1A data (used in special cases)
+The data format is the same as 0x18. The processing flow is the same as 0x18
+Also need to reply, the reply format is the same, the protocol number is changed to 0x1A
+7878 00 1A 160413031849 0d0a
+
+0x1B data (used in special cases)
+The data format is the same as 0x19. The processing flow is the same as 0x19
+Also need to reply, the reply format is the same, the protocol number is changed to 0x1B
+7878 00 1B 160413031849 0d0a
+
+
+0x30 update time
+bidirectional command
+Device sends to server request time synchronization
+Start bit 2byte packet length 1byte protocol number 1byte end bit 2byte
+Eg.7878 01 30 0D0A
+After the server receives it, it needs to return to GMT+0 time (London time).
+Start bit 2byte packet length 1byte protocol number 1byte date time 6byte end bit 2byte
+Eg.7878 07 30 07E00705053718 0D0A
+The time is hexadecimal, and 07E00705053718 is converted to 5:55:24 on July 5, 2016.
+
+Expiration date for equipment 7878 0430 20221031 0D0A
+On behalf of the expiration date of October 31, 2022, shutdown processing cannot be used after this date
+Expiration date for equipment 7878 0530 20221031 0D0A
+On behalf of the expiration date of October 31, 2022, continuous recording cannot be used after this date
+
+0x31 device validity period
+Restrict device usage time function
+The server will send the expiration date to the device after receiving the device login 7878 0430 20221031 0D0A
+It means the expire date is 2022-10-31. After this date, the shutdown process cannot be used.
+After the device restarts, it receives 7878 0430 20221031 0D0A and compares the date before deciding whether to shut down.
+
+0x33 prohibit LBS positioning
+The server sends data(command) to the device to prohibit the upload of LBS data.
+Start 2Byte, packet length 1Byte, protocol number 1Byte, state 1Byte, stop bit 2Byte
+7878 02 33 01 0D0A 01 = On ; 00 = Off
+
+0x34 server sends GPS LBS switch to the terminal. Upload data switch time
+Start 2Byte, packet length 1Byte, protocol number 1Byte, gps 1Byte + data 5Byte + lbs 1Byte + on3Byte + off 3Byte, stop byte 2Byte
+7878 0E 34 01 0108001200 01 010700 012200 0D0A 01 = Off; 00 = ON (ON can be uploaded using base station positioning)
+gps 01 = on control GPS switch
+data 00 = off without setting off 0800: 08: 00 1200 = 12:00 indicates whether the time period of the power saving function (that is, the gps is turned off) is turned on
+lbs 01 = on switch for controlling LBS data (if LBS is turned off, only pure LBS will not be uploaded)
+on 01 = set the power on 0700 = 07:00
+off 01 = set shutdown 2200 = 22:00 timed shutdown
+
+Remote power on / off function
+The remote switch is the same as the previous data upload
+Just said in the meeting, when you insert the charging or button, it will automatically turn on. You want to send the remote shutdown data to the server and synchronize the startup data to the server.
+e.g
+Remote shutdown data received by the device 78780E3401 01XXXXXXXX 010107000121000D0A
+Send boot data when charging or pressing a key 78780E3401 0000000000 010107000121000D0A
+10th to 19th change all 0
+
+0x40 remote monitoring number
+Server send data(command) to device
+Start bit 2byte packet length 1byte protocol number 1byte number end bit 2byte
+Eg.7878 07 40 3133353333333333333333 0D0A
+The number is in ASCII encoding, 3133353333333333333333 is converted to 13533333333
+
+0x41 SOS number
+Server send data(command) to device
+Start bit 2byte packet length 1byte protocol number 1byte number end bit 2byte
+Eg.7878 0C 41 3133353333333333333333 0D0A
+The number is in ASCII encoding, 3133353333333333333333 is converted to 13533333333
+Call the sos phone number send the request from device to the server
+7878 02 41 01 0d0a
+
+0x42 dad number
+Server send data(command) to device
+Start bit 2byte packet length 1byte protocol number 1byte number end bit 2byte
+Eg.7878 0C 42 3133353333333333333333 0D0A
+The number is in ASCII encoding, 3133353333333333333333 is converted to 13533333333
+Call your dad number and  send the request from device to the server
+7878 02 42 01 0d0a
+
+0x43 mom number
+Server send data(command) to device
+Start bit 2byte packet length 1byte protocol number 1byte number end bit 2byte
+Eg.7878 0C 43 3133353333333333333333 0D0A
+The number is in ASCII encoding, 3133353333333333333333 is converted to 13533333333
+Call your mom number and  send the request from device to the server
+7878 02 43 01 0d0a
+
+0x44 stop data upload
+Server send data(command) to device
+Start bit 2byte packet length 1byte protocol number 1byte end bit 2byte
+Eg.7878 01 44 0d0a
+Prevent devices from uploading any data
+
+0x46 GPS timing period setting
+Server send data(command) to device
+Start bit 2byte Packet length 1byte Protocol number 1byte Switch 1byte Start time End time End bit 2byte
+Eg.7878 05 46 01 1130 1230 0D0A
+01 open, 00 is off, time is BCD code, 1130 is 11:30, from this time, turn off GPS to 12:30 to open
+Can set a time period to turn off GPS
+
+0x47 Do not disturb time period setting
+Server send data(command) to device
+Start bit 2byte Packet length 1byte Protocol number 1byte Switch 1byte Week 1byte Start time 1 1byte End time 1 1byte Start time 2 1byte End time 2 1byte End bit 2byte
+Eg.7878 0B 47 01 03 0130 0230 0730 0900 0D0A
+Switch: 01, for Do not disturb function, 00 is off
+Week: 03, each one represents one day of the week, 03 is Monday, Tuesday, if this is 1, it is the day of the week.
+Time period: time representation is BCD code, 0130 is 1:30
+
+0x48 restart device
+Server send data(command) to device
+Start bit 2byte packet length 1byte protocol number 1byte restart operation 1byte end bit 2byte
+Eg.7878 02 48 01 0D0A
+Restart operation 01 After the device receives this command, it restarts.
+Restart operation 02 After the device receives this command, it shuts down.
+
+0x49 Find device 
+(if the tracker has a speaker, when you use this function, the speaker will ringing)
+Server send data(command) to device
+Start bit 2byte packet length 1byte protocol number 1byte state 1byte end bit 2byte
+Eg. 7878 02 49 01 0D0A
+Status: 00 Stop looking for equipment, 01 start looking for equipment
+
+0x50 alarm clock
+(if the tracker has a speaker, when you use this function, the speaker will ringing as per the preset Alarm clock)
+Server send data(command) to device
+Start bit 2byte packet length 1byte protocol number 1byte alarm clock 3 9byte end bit 2byte
+Eg.7878 0a 50 010800 010900 031030 0d0a
+Alarm clock: Coded BCD, the first place is the alarm every day of the week, the second and third place is the hour minute, 010800, every Monday, 8:00 alarm clock. 010900, every Monday at 9:00, 0313030 every Tuesday, at 10:30, the alarm starts.
+If you cancel the setting, all send 0,7878 0a 50 000000 000000 000000 0d0a
+
+0x56 off alarm
+Device sent data to server
+Start bit 2byte packet length 1byte protocol number 1byte flag bit 1byte end bit 2byte
+Eg.7878 02 56 01 0D0A
+Sign bit: 00 shedding 01 wear
+
+0x57 synchronization setting data
+bidirectional command
+The device sends the server to the server to request setting data, including device switch, alarm clock, phone number,
+Start bit 2byte packet length 1byte protocol number 1byte end bit 2byte
+Eg.7878 01 57 0D0A
+Server sent to device settings data
+Start bit 2byte Packet length 1byte Protocol number 1byte Upload interval 2byte Switch 1byte Alarm clock 9byte Do not disturb time switch 1byte Do not disturb time 9byte GPS timer switch 1byte GPS timing time 4byte SOS Mom and Dad 3 numbers (length is uncertain, 3B (";") Do the separator end bit 2byte
+Eg. 7878 1F 57 0060 01 000000 000000 000000 00 000000000000000000 00 00000000 3B3B3B0D0A
+Upload interval: BCD code, 0060, this is 60 seconds
+Switch: Each bit represents a switch, as shown in the following table
+76543210N/aN/asensor switchlight senseBluetoothvibration alarmstepGPSThe first one is the GPS switch
+The fourth position is the light sense switch, sync 0x61 setting
+
+Alarm clock: 9byte, if no alarm is set, it is 0. If there is, it is in the format set by alarm 0x50.
+Do not disturb the time switch 1byte, do not disturb the time setting is the same as the 0x47 protocol format
+GPS timer switch: sync 0x46 setting
+SOS Mom and Dad 3 numbers: all are ASCII codes, the number is 0x41 0x42 0x43 the number of these three protocols
+
+0x58 sync whitelist
+bidirectional command
+Device sent data to the server
+Start bit 2byte packet length 1byte protocol number 1byte end bit 2byte
+Eg.7878 01 58 0D0A
+After the server receives it, it will reply to the device whitelist. The maximum number of whitelists is 50.
+Start bit 2byte packet length 1byte protocol number 1byte white list (length is not fixed) end bit 2byte
+Eg.7878 01 58 646473 3A 3138383338303231303133 3B 63 3A 3138353338303035343032 3B 0D0A
+The separator of the name and number is 3A (":"), and the direct separator of each group whitelist is 3B (";")
+There are two whitelists in the above example, using utf8 encoding: name 646473=dds number 3138383338303231303133=18838021013, name 63=c number 318353353338303035343032=18538005402
+
+0x61 light switch
+Server send data (command) to device
+Start bit 2byte packet length 1byte protocol number 1byte flag bit 1byte end bit 2byte
+Eg.7878 02 61 01 0D0A
+Mark 01 turns on the light, 00 turns off the light
+
+0x64 recording request
+Server send data (command) to device
+Start bit 2byte packet length 1byte protocol number 1byte flag bit 1byte end bit 2byte
+Eg.7878 02 64 03 0D0A
+Sign position 01 photo, 02 video, 03, recording.
+
+Package length position as a function mark, control device function
+The server sends a voice recording function to the terminal (64)
+7878 03 64 04 00 0D0A Off
+7878 03 64 04 01 0D0A On
+
+The server sends a voice callback function to the terminal (64)
+7878 03 64 05 00 0D0A Off
+7878 03 64 05 01 0D0A On
+
+The server sends an LED switch to the terminal (64)
+7878 03 64 06 00 0D0A Off
+7878 03 64 06 01 0D0A On
+
+
+The server sends a switch to the terminal (64)
+ Start 2Byte, packet length 1Byte, protocol number 1Byte, function 2Byte stop bit 2Byte
+
+7878 03 64 FF X3 0D0A On
+0xX3
+X value 1= car, 0= personal
+3 = 0011
+1st LED switch
+The second sound switch
+3rd voice recording switch
+4th voice-activated callback switch
+
+The server sends a recording request to the terminal
+Start 2Byte, identification number 1Byte, protocol number 1Byte, stop bit 2Byte
+     7878 02 64 03 0D0A
+
+Added terminal sending
+   Recording 7878 046403 0100 0D0A
+   Recorded 7878 046403 0200 0D0A
+   Uploading XX% 7878 046403 03XX 0D0A
+   Uploaded 7878 046403 0400 0D0A
+   Abnormal 7878 046403 0500 0D0A
+
+Introduction to the recording function process:
+Need a client to build an ftp server
+After receiving the 7878 02 64 03 0D0A request, the device will start recording. After the recording is completed, the device will send a recording file to the ftp service. The file name format is a file of 6103-imei-yearmonthdayhourminsec-filelength.amr, eg: 6103-888888888888888-2019070809101112-50000.amr.
+The server determines which device uploaded the recording according to the file name and time, and then notifies the device to receive it.
+different lengths of time
+Voice 30&apos;s 78780264030D0A
+Added 10&apos;s 78780264040D0A
+Added 60&apos;s 78780264050D0A
+
+The device reply remains unchanged, but the server adds 04, 05 protocol
+
+
+0x65 recording request (not supported at this time)
+Server send data(command) to device
+Start bit 2byte packet length 1byte protocol number 1byte recording time 1byte end bit 2byte
+7878 02 65 0A 0D0A
+0a, 10 seconds recording, recording time is 0, resend the current recording file
+The device sends a file to the server:
+Start bit 2byte Total number of packets 1byte Current package index 1byte Data length 2byte Data Xbyte
+6868 10 01 0200 data
+6868 10 02 0200 data
+6868 10 03 0200 data
+...
+6868 10 10 0200 data
+Data length is 512
+After sending
+Send the file name to the server
+Start bit 2byte 1byte protocol number 1byte file name xbyte end bit 2byte
+
+Eg.7878 01 65 File name 0d0a
+The server writes the data part to the .amr format file according to the index of each package.
+If the data is received incorrectly, you can send it
+7878 02 65 00 0D0A
+Resend
+If one or two of the packets are missing, the request packet is sent separately. For example, a total of 10 packages, the seventh is missing, send:
+Start bit 2byte Total number of packets 1byte Current package index 1byte Data length 2byte
+6868 10 07 0200
+
+tcp distribution
+7878 01 AA xxxxxxx 0D0A
+7878 02 AA xxxxxxx 0D0A
+7878 .. AA xxxxxxx 0D0A
+7878 FFAA xxxxxxx 0D0A
+ 
+server reply
+7878xxAA0D0A
+For example, after receiving 7878 01 AA xxxxxxx 0D0A reply 787801AA0D0A
+xxxx amr file segment content
+01, 02 , FF Content order
+FF is end of file last packet
+
+0x66 modify server IP and port
+Server send data(command) to device
+Start bit 2byte packet length 1byte protocol number 1byte IP 4byte port 2byte end bit 2byte
+Eg.7878 07 66 78 ED 6E 88 17AF 0D0A
+IP: 66 78 ed 6e 88 hexadecimal conversion decimal 120.237.110.136
+Port: 17AF hexadecimal conversion decimal 6063
+After the device is received, it will be converted to a new IP and port to log in again.
+
+0x67 recovery password
+Device sent data(command) to server
+Start bit 2byte packet length 1byte protocol number 1byte flag bit 1byte end bit 2byte
+Eg.7878 02 67 01 0D0A
+After the server receives it, it must reply to 7878 02 67 01 0D0A to reset the login password of the device. Send a text message to the device when the device password is forgotten, and the device issues the command to restore the password.
+
+0x69WIFI positioning data packet
+The agreement is bidirectional
+Device send data(command) to the server
+Start bit 2byte WIFI number 1byte Protocol number 1byte Date time 6byte WIFI data Length indefinite fixed format LBS data Length indefinite fixed format Stop bit 2byte
+Wifi/lbs
+Eg.7878 03 69 160413031849 1475905BD30E25 001E10BBF7635D 14759006E62656 05 01CC00 28660F2132 28660F1F28 28660EA81E 2866107314 28660F2014 0D0A
+Lbs
+Eg. 7878 00 69 160413031849 05 01CC00 28660F2132 28660F1F28 28660EA81E 2866107314 28660F2014 0D0A
+The third bit of this protocol is not the length of the data packet, the number of WIFI hotspots, the previous set of WIFI/LBS data is 03, that is, there are 3 WIFI hotspots, the latter LBSlbs data, there is no WIFI hotspot, this data is 00.
+Date time: 160413031849, this data is different from the 0x10 protocol, this is BCD coded, dated April 13, 16 years, 3:18:49.
+WIFI data
+The minimum number of WIFI hotspots is 3, and the maximum number is 8. If the device searches for more than 8, only the best 8 hotspots of the signal are taken. 1475905BD30E25 The first 6 bytes are bssid, the latter 1 byte is rssi, then the bssid of the first WIFI hotspot is 0x14:0x75:0x90:0x5B:0xD3:0x0E, rssi is 0x25.
+Number of LBSs: 05 is the number of base stations, and the number of base stations is at least 2
+MCCMNC: mcc2byte, mnc1byte 01CC00 is 46000
+Base station data: lac2byte cellid 2byte, mciss1byte, 2866 0F21 32 The lac in the example is 10342, the cellid is 3873, and the mciss is 50.
+
+Server returns data
+1. Received data must reply to the protocol number plus time (default reply to this one)
+Start bit 2byte reserved byte 1byte protocol number 1byte time 6byte end bit 2byte
+ 7878 00 69 160413031849 0d0a The package length string is 00
+2. Start bit 2byte packet length 1byte protocol number 1byte latitude and longitude end bit 2byte
+Eg. 7878 16 69 2B32322E363736373436 2C 2B3131332E3934303934 0D0A
+2C (",") is the interval symbol
+The data encoding method is ASCII, and the conversion result is
+2B32322E363736373436 = +22.676746
+2B3131332E3934303934 = +113.94094
+Note: The data length of this 1byte length data is not the same as the actual length. Please take the data in the data format. Reply data length byte 00. 0D0A is more likely to appear in the time data, and it needs to be judged according to the length of the data to avoid truncation errors.
+
+V1.2 0x69 0x17 are all working
+Added alarm information
+Start bit 2byte WIFI number 1byte Protocol number 1byte Date time 6byte WIFI data Length indefinite fixed format LBS data Length indefinite fixed format Alarm information 1byte stop bit 2byte
+
+0x72 Attendance
+Server send data(command) to device
+Start bit 2byte Packet length 1byte Protocol number 1byte Protocol data nbyte End bit 2byte
+
+Data Format
+Week, week|time|latitude and longitude|WiFi hotspot; week, week|time|latitude and longitude|WiFi hotspot; week, week|time|latitude and longitude|WiFi hotspot;
+
+At most 3 attendances can be set, separator 0x3b';', 0x2c',', 0x7c'|' 0x3a':' 0x2d'-'
+See the following example analysis for details
+
+eg.
+78786972312C327C30303A30302D32333A35397C6232322E3538313636382C3131332E3931393431357C3B332C347C30303A30302D32333A35397C7C546F70696E2D35473B352C367C30303A30302D32333A35397C623139343A30302D32333A35397C6231393431357C3B332C347C30303A30302D32333A35397C7C546F70696E2D35473B352C367C30303A30302D32333A35397B62313932E35383C13393335733573636382343C313
+Below is a line-by-line explanation of this data
+7878 Baotou
+69 Data length
+72 Agreement Number
+The first attendance data
+31 open Monday
+2C separator,
+32 Open on Tuesday
+7C Separator|
+3030 time hour 00
+3A separator:
+3030 time minutes 00
+2D separator-
+3233 time hours 23
+3A separator:
+3539 time minutes 59
+7C separator|
+6232322E3538313636382C3131332E393139343135 Latitude and Longitude Time Attendance b22.581668,113.919415
+7C separator|
+3B separator;
+33 open on Wednesday
+2C separator,
+34 Open on Thursday
+7C Separator|
+3030 time hour 00
+3A separator:
+3030 time minutes 00
+2D separator-
+3233 time hour 23
+3A separator:
+3539 time minutes 59
+7C separator|
+7C separator|
+546F70696E2D3547 Hot Name Topin-5G
+3B separator;
+35 open on friday
+2C separator,
+36 Open on Saturday
+7C separator|
+3030 time hour 00
+3A separator:
+3030 time minutes 00
+2D separator-
+3233 time hour 23
+3A separator:
+3539 time minutes 59
+7C separator|
+6232322E3538313636382C3131332E393139343135 latitude and longitude attendance b22.581668,113.919415
+7C separator|
+3B separator;
+0D0A end bit
+
+Other examples open part of attendance:
+78784672312C322C337C30303A30302D32333A35397C6232322E3538313633382C3131332E3931393135387C3B342C352C367C30303A30302D32333A35397C7C546F70696E2D35473B0D0A
+
+Turn off attendance
+787800720D0A
+The device receives the setting reply:
+787800720d0a
+
+When the device arrives at the wifi hotspot, send attendance data:
+7878 02 72 01 0d0a
+Leaving the attendance point
+7878 02 72 00 0d0a
+
+0x73 Enter and exit fence alarm
+Device reception
+Start bit 2 bytes, the length 2 bytes, the protocol number 1byte, the fence number 1byte, the in and out status 1byte, and the end bit 2 bytes
+7878 03 73 01/02/03(Which fence alarms) 00/01(entry and exit) 0D0A
+01/02/03, the fence alarm serial number
+00/01, 01 enters the fence, 00 exits the fence
+
+0x80 manual positioning
+Server send data(command) to device
+Start bit 2byte packet length 1byte protocol number 1byte stop bit 2byte
+
+The server sends a request to the terminal to request an update of the location message.
+Instant Update WIFI / GPS / LBS 7878 01 80 0D0A
+Im updated WIFI / LBS 7878 02 80 0D0A
+
+Eg.7878 01 80 0D0A
+After the device receives the location, it uploads the latest positioning data within 1 minute. If the GPS can be located within 1 minute, the positioning data is 0x10 protocol data. If it is WIFI+LBS data, the returned 0x69 protocol data.
+Eg.7878 02 80 0D0A
+The device receives 0280 and directly uploads the wifilbs location.
+
+Device sent data to the server
+The reason why the device is sent to the server without uploading the location
+Start bit 2byte Packet length 1byte Protocol number 1byte Cause 1byte Stop bit 2byte
+7878 02 80 xx 0d0a
+  01-Time is incorrect
+  02- LBS number is not enough(ambient cellular tower number is not enough)
+  03 - Wifi number is not enough(ambient wifi signal source is not enough)
+  04 -lbs searching more than 3 times
+  05 - the same lbs and wifi data
+  06 - prohibits lbs uploading, without wifi
+  07 - gps spacing less than 50 meters
+
+0x81 charging completed
+Device sent data to server
+Start bit 2byte packet length 1byte protocol number 1byte end bit 2byte
+Eg. 7878 01 81 0D0A
+
+In addition, 7787 02 81 0D0A means low power alarm, uploaded every 12 hours, the third byte is 0x02
+
+0x82 charging connection
+Device sent to server
+Start bit 2byte packet length 1byte protocol number 1byte end bit 2byte
+Eg. 7878 01 82 0D0A
+
+0x83 charging disconnected
+Device sent data to server
+Start bit 2byte packet length 1byte protocol number 1byte end bit 2byte
+Eg. 7878 01 82 0D0A
+
+0x86 overspeed alarm
+Bidirectional command
+Server sent to device
+Start bit 2byte packet length 1byte protocol number 1byte speed speed 1byte end bit 2byte
+Eg.7878 02 86 50 0D0A
+Speeding speed: 50 km / h
+When the speed exceeds the set value of 50km/h, the device sends it to the server:
+Start bit 2byte packet length 1byte protocol number 1byte speed speed 1byte end bit 2byte
+Eg.7878 02 86 50 0D0A
+
+0x92 0x93 0x94 vibration alarm
+0x92 vibration alarm on
+Server sent data(command) to device
+Start bit 2byte packet length 1byte protocol number 1byte vibration level 1byte end bit 2byte
+Eg.7878 02 92 01 0D0A
+Turn on the vibration alarm, the vibration of the 01 level will send the vibration alarm 0x94
+ 
+0x93 vibration alarm off
+Server sent data(command) to device
+Start bit 2byte packet length 1byte protocol number 1byte end bit 2byte
+Eg.7878 01 93 0D0A
+Turn off the vibration alarm
+
+0x94 vibration alarm
+Device sent data(command) to server
+Start bit 2byte packet length 1byte protocol number 1byte end bit 2byte
+Eg.7878 01 94 0D0A
+Send an alarm message to the server when the device is reached
+
+0x97 0x98 positioning data upload interval
+
+0x97 server settings upload interval
+Server send data(command) to device
+Start bit 2byte packet length 1byte protocol number 1byte upload interval 2byte end bit 2byte
+Eg.7878 03 97 0050 0D0A
+The upload interval is set to 0050=80 seconds to upload once, and the upload interval is 10-7200 seconds.
+
+0x98 device sets the upload interval through SMS, and synchronizes with the server.
+Bidirectional command
+Device sent data(command) to the server
+Start bit 2byte packet length 1byte protocol number 1byte upload interval 2byte end bit 2byte
+eg.7878 03 98 0050 0D0A
+After the SMS is set, the device sends this command to the server.
+Server reply
+2byte start bit length of the packet protocol number 1byte 1byte upload interval 2byte end bit 2byte
+eg.7878 03 98 0050 0D0A
+The server needs to reply to the data, and the device sends a text message after receiving it, and the notification is successfully set.
+
+0x99 SOS alarm
+Device sent data to server
+Start bit 2byte packet length 1byte protocol number 1byte end bit 2byte
+Eg.7878 01 99 0D0A
+Press the SOS button to send a help command to the server.
+
+0xB3 iccid
+Device sent data to server
+Start bit 2byte packet length 1byte protocol number 1byte data 20byte end bit 2byte
+After the device logs in, send iccid to the platform, iccid is ascii
+Eg.7878 15 B3 3132333435363738393031323334353637383930 0D0A
+The iccid of this device is 12345678901234567890
+The device will automatically upload the iccid information after the device synchronization time.
+
+0xF2 server requests device to send text messages (not supported at this time)
+The server requests the terminal to send an SMS (F2)
+Start 2Byte, packet length 1Byte, protocol number 2Byte, SMS xxByte, stop bit 2Byte
+SMS = tel + @@@ + text
+7878 LLF2 xxxxxxxxxxxx 0D0A
+
+0x52 Device sends text to the server (not supported at this time)
+The terminal sends text to the server ( 52 )
+Start 2Byte, packet length 1Byte, protocol number 1Byte, literal xByte, stop bit 2Byte
+7878 09 52 xxxxxxxxxx 0D0A
+
+Voice Send:
+ftp file name: STOR 6103-359339075668418-20190809183755-10156.amr, project-imei-datetime-file size.amr
+After sending, the device will upload a file upload instruction:
+0x65, 78780165+ file name ascii + 0d0a
+Modify ftp server address and port, username and password via SMS:
+FTPSERVER # Address # Port #
+FTPACCOUNT # Username # Password #
+
+
+
+V1.3
+Added some settings reply function
+
+
+Power saving function
+The terminal received a reply 787800340D0A
+
+Pickup function
+The terminal received a reply 787801400D0A
+
+Monitor contact function
+The terminal received a reply 787800410D0A
+
+Mute function
+The terminal received a reply 787800470D0A
+
+Find settings
+Status 01 Finding settings; 00 Stop looking for settings
+The terminal received a reply 78780149XX0D0A
+
+Alarm function
+The terminal received a reply 787800500D0A
+
+LED switch
+Sound switch
+Voice activated recording switch
+Voice activated callback switch
+The terminal received a reply with the same content
+
+Attendance function
+The terminal received a reply 787800720D0A
+
+Request updated positioning
+The terminal received a reply 787802800D0A
+
+
+0157 returned synchronization
+Terminals don't need to send a reply
+
+LED switch
+Sound switch
+Voice activated recording switch
+Voice activated callback switch
+The terminal received a reply. The same content was changed to reply 787800640D0A
+
+Server sends voice to terminal
+
+Start 2Byte, mark 1Byte, protocol number 1Byte, voice XX Byte, stop byte 2Byte
+Mark
+01 = ip 120.76.28.239
+02 = ip 120.76.241.191
+03 = ip 120.79.107.100
+
+XX = file name
+7878 01 51 4754493933302333353633313430343136323030353123323031393039323330383137303323333034362e616d72 0D0A
