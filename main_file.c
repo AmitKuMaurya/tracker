@@ -22,7 +22,8 @@
 // Forward declaration
 void command_action(Conn *c, const char *cmd, int len);
 void login_command(Conn *c, const unsigned char *cmd, int len);
-
+void gps_command(Conn *c, const unsigned char *cmd, int len);
+void lbs_command(Conn *c, const unsigned char *cmd, int len);
 // Utility: make socket non-blocking
 int make_socket_non_blocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -220,6 +221,11 @@ void command_action(Conn *c, const char *cmd, int len) {
             printf("heartbeat command received\n");
         } else if (proto == 0x10) {
             printf("GPS online command received\n");
+            gps_command(c, (const unsigned char *)cmd, len);
+        }
+        else if(proto == 0x18) {
+            printf("LBS offline command received\n");
+            lbs_command(c, (const unsigned char *)cmd, len);
         }
     }
 }
@@ -250,5 +256,195 @@ void login_command(Conn *c, const unsigned char *cmd, int len) {
     unsigned char response[] = {0x78, 0x78, 0x01, 0x01, 0x0D, 0x0A};
     send(c->fd, response, sizeof(response), 0);
 }
+
+void gps_command(Conn *c, const unsigned char *cmd, int len) {
+    // Minimum length check: 78 78 + len(1) + proto(1) + datetime(6) + gps_info(1) + lat_long(8) + speed(1) + status_heading(2) + terminator(2)
+    if (len < 24) {
+        printf("GPS command too short: %d bytes\n", len);
+        return;
+    }
+    
+    // Extract status and heading bytes (position depends on protocol version)
+    // For basic 0x10 protocol, status/heading is at position: 2(header) + 1(len) + 1(proto) + 6(datetime) + 1(gps_info) + 8(lat_long) + 1(speed) = 20
+    int status_pos = 20;
+    if (status_pos + 1 >= len) {
+        printf("Invalid GPS command length for status extraction\n");
+        return;
+    }
+    
+    unsigned char status_byte1 = cmd[status_pos];
+    unsigned char status_byte2 = cmd[status_pos + 1];
+    
+    // Check if GPS is positioned (bit 4 of first status byte)
+    // According to protocol: bit 4 (0-indexed from left) indicates GPS positioning status
+    // 0 = GPS not positioned, 1 = GPS positioned
+    int is_positioned = (status_byte1 & 0x08) != 0; // Mask with 00001000 (bit 3 from right)
+    
+    if (!is_positioned) {
+        printf("GPS not positioned, skipping data processing\n");
+        
+        // Still need to reply to the device as required by protocol
+        unsigned char response[] = {0x78, 0x78, 0x00, 0x10, 
+                                   cmd[4], cmd[5], cmd[6], cmd[7], cmd[8], cmd[9], // Copy datetime
+                                   0x0D, 0x0A};
+        send(c->fd, response, sizeof(response), 0);
+        return;
+    }
+    
+    printf("GPS is positioned, processing data...\n");
+    
+    // Parse datetime (BCD encoded)
+    // Position: 4-9 (after 78 78 len proto)
+    int year = (cmd[4] >> 4) * 10 + (cmd[4] & 0x0F) + 2000;
+    int month = (cmd[5] >> 4) * 10 + (cmd[5] & 0x0F);
+    int day = (cmd[6] >> 4) * 10 + (cmd[6] & 0x0F);
+    int hour = (cmd[7] >> 4) * 10 + (cmd[7] & 0x0F);
+    int minute = (cmd[8] >> 4) * 10 + (cmd[8] & 0x0F);
+    int second = (cmd[9] >> 4) * 10 + (cmd[9] & 0x0F);
+    
+    printf("DateTime: %04d-%02d-%02d %02d:%02d:%02d (GMT+0)\n", 
+           year, month, day, hour, minute, second);
+    
+    // Parse latitude and longitude (positions 11-18)
+    // GPS info byte at position 10 contains length and satellite count
+    unsigned char gps_info = cmd[10];
+    int gps_data_length = (gps_info >> 4) & 0x0F;
+    int satellite_count = gps_info & 0x0F;
+    printf("GPS data length: %d, Satellites: %d\n", gps_data_length, satellite_count);
+    
+    // Extract latitude (4 bytes) and longitude (4 bytes)
+    uint32_t latitude_raw = (cmd[11] << 24) | (cmd[12] << 16) | (cmd[13] << 8) | cmd[14];
+    uint32_t longitude_raw = (cmd[15] << 24) | (cmd[16] << 16) | (cmd[17] << 8) | cmd[18];
+    
+    // Convert to degrees (divide by 30000 to get minutes, then convert to degrees)
+    double latitude_minutes = latitude_raw / 30000.0;
+    double longitude_minutes = longitude_raw / 30000.0;
+    
+    double latitude_degrees = floor(latitude_minutes / 60.0);
+    double latitude_decimal = latitude_degrees + (latitude_minutes - (latitude_degrees * 60.0)) / 60.0;
+    
+    double longitude_degrees = floor(longitude_minutes / 60.0);
+    double longitude_decimal = longitude_degrees + (longitude_minutes - (longitude_degrees * 60.0)) / 60.0;
+    
+    // Check direction from status byte
+    int is_north = (status_byte1 & 0x04) != 0; // Bit 5: 0=South, 1=North
+    int is_west = (status_byte1 & 0x02) != 0;   // Bit 6: 0=East, 1=West
+    
+    if (!is_north) {
+        latitude_decimal = -latitude_decimal; // South latitude is negative
+    }
+    if (is_west) {
+        longitude_decimal = -longitude_decimal; // West longitude is negative
+    }
+    
+    printf("Latitude: %.6f %s\n", latitude_decimal, is_north ? "N" : "S");
+    printf("Longitude: %.6f %s\n", longitude_decimal, is_west ? "W" : "E");
+    
+    // Parse speed (1 byte)
+    unsigned char speed_kmh = cmd[19];
+    printf("Speed: %d km/h\n", speed_kmh);
+    
+    // Parse heading (from status bytes)
+    // Heading is stored in the last 10 bits of the two status bytes
+    int heading = ((status_byte1 & 0x03) << 8) | status_byte2;
+    printf("Heading: %d degrees\n", heading);
+    
+    
+    // Reply to device as required by protocol
+    unsigned char response[] = {0x78, 0x78, 0x00, 0x10, 
+                               cmd[4], cmd[5], cmd[6], cmd[7], cmd[8], cmd[9], // Copy datetime
+                               0x0D, 0x0A};
+    send(c->fd, response, sizeof(response), 0);
+    
+    printf("GPS data processed and reply sent\n");
+}
+
+void lbs_command(Conn *c, const unsigned char *cmd, int len) {
+    // Minimum length check: 78 78 + wifi_count(1) + proto(1) + datetime(6) + ... + terminator(2)
+    if (len < 12) {
+        printf("LBS command too short: %d bytes\n", len);
+        return;
+    }
+
+    // Extract WiFi count (third byte)
+    unsigned char wifi_count = cmd[2];
+    printf("WiFi hotspots count: %d\n", wifi_count);
+
+    // Parse datetime (BCD encoded)
+    int year = (cmd[4] >> 4) * 10 + (cmd[4] & 0x0F) + 2000;
+    int month = (cmd[5] >> 4) * 10 + (cmd[5] & 0x0F);
+    int day = (cmd[6] >> 4) * 10 + (cmd[6] & 0x0F);
+    int hour = (cmd[7] >> 4) * 10 + (cmd[7] & 0x0F);
+    int minute = (cmd[8] >> 4) * 10 + (cmd[8] & 0x0F);
+    int second = (cmd[9] >> 4) * 10 + (cmd[9] & 0x0F);
+    
+    printf("DateTime: %04d-%02d-%02d %02d:%02d:%02d (GMT+0)\n", 
+           year, month, day, hour, minute, second);
+
+    // Skip WiFi data (7 bytes per hotspot: 6B BSSID + 1B RSSI)
+    int offset = 10 + (wifi_count * 7);
+    
+    if (offset >= len - 3) {
+        printf("Invalid LBS command length after WiFi data\n");
+        return;
+    }
+
+    // Parse LBS count
+    unsigned char lbs_count = cmd[offset++];
+    printf("LBS base stations count: %d\n", lbs_count);
+
+    if (offset + 3 + (lbs_count * 9) + 1 + 2 > len) {
+        printf("Invalid LBS command length for base station data\n");
+        return;
+    }
+
+    // Parse MCC and MNC (BCD encoded)
+    unsigned char mcc_high = cmd[offset];
+    unsigned char mcc_low = cmd[offset + 1];
+    unsigned char mnc = cmd[offset + 2];
+    offset += 3;
+
+    int mcc = (mcc_high >> 4) * 1000 + (mcc_high & 0x0F) * 100 +
+              (mcc_low >> 4) * 10 + (mcc_low & 0x0F);
+    int mnc_val = (mnc >> 4) * 10 + (mnc & 0x0F);
+
+    printf("MCC: %d, MNC: %d\n", mcc, mnc_val);
+
+    // Parse each base station
+    for (int i = 0; i < lbs_count; i++) {
+        if (offset + 9 > len) break;
+
+        // Parse LAC (4 bytes)
+        uint32_t lac = (cmd[offset] << 24) | (cmd[offset + 1] << 16) | 
+                      (cmd[offset + 2] << 8) | cmd[offset + 3];
+        offset += 4;
+
+        // Parse Cell ID (4 bytes)
+        uint32_t cell_id = (cmd[offset] << 24) | (cmd[offset + 1] << 16) | 
+                          (cmd[offset + 2] << 8) | cmd[offset + 3];
+        offset += 4;
+
+        // Parse RSSI (1 byte) - convert to negative value
+        int rssi = -(cmd[offset++]);
+
+        printf("Base Station %d: LAC=%u, Cell ID=%u, RSSI=%ddBm\n", 
+               i + 1, lac, cell_id, rssi);
+    }
+
+    // Parse alarm information (if present)
+    if (offset < len - 2) {
+        unsigned char alarm = cmd[offset++];
+        printf("Alarm information: 0x%02X\n", alarm);
+    }
+
+    // Reply to device as required by protocol
+    unsigned char response[] = {0x78, 0x78, 0x00, cmd[3],  // Protocol number
+                               cmd[4], cmd[5], cmd[6], cmd[7], cmd[8], cmd[9], // Copy datetime
+                               0x0D, 0x0A};
+    send(c->fd, response, sizeof(response), 0);
+    
+    printf("LBS data processed and reply sent\n");
+}
+
 
 
