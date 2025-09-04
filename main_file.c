@@ -4,11 +4,14 @@
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <stdint.h>
+#include <math.h>
 #include <arpa/inet.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include "conn.h"
 #include "login_map.h"
+#include "offline_data.h"
 
 #define PORT 12345
 #define MAX_EVENTS 10000   // maximum epoll events
@@ -23,7 +26,6 @@
 void command_action(Conn *c, const char *cmd, int len);
 void login_command(Conn *c, const unsigned char *cmd, int len);
 void gps_command(Conn *c, const unsigned char *cmd, int len);
-void lbs_command(Conn *c, const unsigned char *cmd, int len);
 // Utility: make socket non-blocking
 int make_socket_non_blocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -359,92 +361,7 @@ void gps_command(Conn *c, const unsigned char *cmd, int len) {
     printf("GPS data processed and reply sent\n");
 }
 
-void lbs_command(Conn *c, const unsigned char *cmd, int len) {
-    // Minimum length check: 78 78 + wifi_count(1) + proto(1) + datetime(6) + ... + terminator(2)
-    if (len < 12) {
-        printf("LBS command too short: %d bytes\n", len);
-        return;
-    }
 
-    // Extract WiFi count (third byte)
-    unsigned char wifi_count = cmd[2];
-    printf("WiFi hotspots count: %d\n", wifi_count);
-
-    // Parse datetime (BCD encoded)
-    int year = (cmd[4] >> 4) * 10 + (cmd[4] & 0x0F) + 2000;
-    int month = (cmd[5] >> 4) * 10 + (cmd[5] & 0x0F);
-    int day = (cmd[6] >> 4) * 10 + (cmd[6] & 0x0F);
-    int hour = (cmd[7] >> 4) * 10 + (cmd[7] & 0x0F);
-    int minute = (cmd[8] >> 4) * 10 + (cmd[8] & 0x0F);
-    int second = (cmd[9] >> 4) * 10 + (cmd[9] & 0x0F);
-    
-    printf("DateTime: %04d-%02d-%02d %02d:%02d:%02d (GMT+0)\n", 
-           year, month, day, hour, minute, second);
-
-    // Skip WiFi data (7 bytes per hotspot: 6B BSSID + 1B RSSI)
-    int offset = 10 + (wifi_count * 7);
-    
-    if (offset >= len - 3) {
-        printf("Invalid LBS command length after WiFi data\n");
-        return;
-    }
-
-    // Parse LBS count
-    unsigned char lbs_count = cmd[offset++];
-    printf("LBS base stations count: %d\n", lbs_count);
-
-    if (offset + 3 + (lbs_count * 9) + 1 + 2 > len) {
-        printf("Invalid LBS command length for base station data\n");
-        return;
-    }
-
-    // Parse MCC and MNC (BCD encoded)
-    unsigned char mcc_high = cmd[offset];
-    unsigned char mcc_low = cmd[offset + 1];
-    unsigned char mnc = cmd[offset + 2];
-    offset += 3;
-
-    int mcc = (mcc_high >> 4) * 1000 + (mcc_high & 0x0F) * 100 +
-              (mcc_low >> 4) * 10 + (mcc_low & 0x0F);
-    int mnc_val = (mnc >> 4) * 10 + (mnc & 0x0F);
-
-    printf("MCC: %d, MNC: %d\n", mcc, mnc_val);
-
-    // Parse each base station
-    for (int i = 0; i < lbs_count; i++) {
-        if (offset + 9 > len) break;
-
-        // Parse LAC (4 bytes)
-        uint32_t lac = (cmd[offset] << 24) | (cmd[offset + 1] << 16) | 
-                      (cmd[offset + 2] << 8) | cmd[offset + 3];
-        offset += 4;
-
-        // Parse Cell ID (4 bytes)
-        uint32_t cell_id = (cmd[offset] << 24) | (cmd[offset + 1] << 16) | 
-                          (cmd[offset + 2] << 8) | cmd[offset + 3];
-        offset += 4;
-
-        // Parse RSSI (1 byte) - convert to negative value
-        int rssi = -(cmd[offset++]);
-
-        printf("Base Station %d: LAC=%u, Cell ID=%u, RSSI=%ddBm\n", 
-               i + 1, lac, cell_id, rssi);
-    }
-
-    // Parse alarm information (if present)
-    if (offset < len - 2) {
-        unsigned char alarm = cmd[offset++];
-        printf("Alarm information: 0x%02X\n", alarm);
-    }
-
-    // Reply to device as required by protocol
-    unsigned char response[] = {0x78, 0x78, 0x00, cmd[3],  // Protocol number
-                               cmd[4], cmd[5], cmd[6], cmd[7], cmd[8], cmd[9], // Copy datetime
-                               0x0D, 0x0A};
-    send(c->fd, response, sizeof(response), 0);
-    
-    printf("LBS data processed and reply sent\n");
-}
 
 
 
