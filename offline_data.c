@@ -18,13 +18,14 @@
 #include <errno.h>
 #include "offline_data.h"
 #include "json_writer.h"
+#include "lbs_latlong.h"
 
 /* Constants and Data Structures are now defined in offline_data.h */
 
 /* Function Prototypes - Now declared in header file */
 
 /* Global Variables */
-static const char *LOG_PREFIX = "[LBS_PROCESSOR]";
+static const char *LOG_PREFIX = "LBS_PROCESSOR";
 
 /**
  * @brief Check if a cell ID is unique in the given array
@@ -41,6 +42,27 @@ int is_cell_id_unique(const CellInfo *cells, int count, uint32_t cell_id) {
     
     for (int i = 0; i < count; i++) {
         if (cells[i].cell_id == cell_id) {
+            return 0; // Not unique
+        }
+    }
+    return 1; // Unique
+}
+
+/**
+ * @brief Check if a WiFi MAC address is unique in the given array
+ * 
+ * @param wifis Array of WiFi information
+ * @param count Number of WiFi entries in the array
+ * @param mac MAC address to check for uniqueness (6 bytes)
+ * @return 1 if unique, 0 if duplicate
+ */
+int is_wifi_mac_unique(const WiFiInfo *wifis, int count, const unsigned char *mac) {
+    if (!wifis || !mac || count < 0) {
+        return 0;
+    }
+    
+    for (int i = 0; i < count; i++) {
+        if (memcmp(wifis[i].mac, mac, MAC_ADDRESS_SIZE) == 0) {
             return 0; // Not unique
         }
     }
@@ -87,7 +109,7 @@ int parse_datetime(const unsigned char *cmd, LBSData *data) {
 }
 
 /**
- * @brief Parse WiFi hotspot data
+ * @brief Parse WiFi hotspot data with MAC address deduplication
  * 
  * @param cmd Command buffer
  * @param len Command length
@@ -101,13 +123,71 @@ int parse_wifi_data(const unsigned char *cmd, int len, LBSData *data) {
     }
     
     data->wifi_count = cmd[2];
+    data->original_wifi_count = data->wifi_count;
     printf("%s WiFi hotspots count: %d\n", LOG_PREFIX, data->wifi_count);
     
     // Validate WiFi count
-    if (data->wifi_count < 0 || data->wifi_count > 20) {
+    if (data->wifi_count < 0 || data->wifi_count > MAX_WIFI_HOTSPOTS) {
         log_parsing_error("Invalid WiFi count", __LINE__);
         return -1;
     }
+    
+    if (data->wifi_count == 0) {
+        data->unique_wifi_count = 0;
+        data->unique_wifis = NULL;
+        return 0;
+    }
+    
+    // Check if we have enough data for all WiFi entries
+    int wifi_data_start = 10; // After header, len, protocol, datetime
+    int required_wifi_bytes = data->wifi_count * WIFI_DATA_BYTES_PER_HOTSPOT;
+    if (wifi_data_start + required_wifi_bytes > len) {
+        log_parsing_error("Insufficient data for WiFi parsing", __LINE__);
+        return -1;
+    }
+    
+    // Allocate memory for unique WiFi entries
+    data->unique_wifis = malloc(data->wifi_count * sizeof(WiFiInfo));
+    if (!data->unique_wifis) {
+        log_parsing_error("Memory allocation failed for unique WiFi entries", __LINE__);
+        return -1;
+    }
+    
+    data->unique_wifi_count = 0;
+    int offset = wifi_data_start;
+    
+    // Parse each WiFi hotspot
+    for (int i = 0; i < data->wifi_count; i++) {
+        if (offset + WIFI_DATA_BYTES_PER_HOTSPOT > len) {
+            printf("%s Warning: Incomplete WiFi data at index %d\n", LOG_PREFIX, i);
+            break;
+        }
+        
+        // Extract MAC address (6 bytes) and RSSI (1 byte)
+        // WiFi data format: MAC[6] + RSSI[1] = 7 bytes per hotspot
+        unsigned char mac[MAC_ADDRESS_SIZE];
+        memcpy(mac, cmd + offset, MAC_ADDRESS_SIZE);
+        int rssi = -(cmd[offset + MAC_ADDRESS_SIZE]); // Convert to negative dBm
+        
+        // Check if this MAC address is unique
+        if (is_wifi_mac_unique(data->unique_wifis, data->unique_wifi_count, mac)) {
+            // Add to unique WiFi array
+            memcpy(data->unique_wifis[data->unique_wifi_count].mac, mac, MAC_ADDRESS_SIZE);
+            data->unique_wifis[data->unique_wifi_count].rssi = rssi;
+            data->unique_wifi_count++;
+            
+            printf("%s WiFi %d: MAC=%02X:%02X:%02X:%02X:%02X:%02X, RSSI=%ddBm (UNIQUE)\n", 
+                   LOG_PREFIX, i + 1, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], rssi);
+        } else {
+            printf("%s WiFi %d: MAC=%02X:%02X:%02X:%02X:%02X:%02X, RSSI=%ddBm (DUPLICATE - SKIPPED)\n", 
+                   LOG_PREFIX, i + 1, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], rssi);
+        }
+        
+        offset += WIFI_DATA_BYTES_PER_HOTSPOT;
+    }
+    
+    printf("%s Original WiFi hotspots: %d, Unique WiFi hotspots: %d\n", 
+           LOG_PREFIX, data->original_wifi_count, data->unique_wifi_count);
     
     return 0;
 }
@@ -272,56 +352,19 @@ int write_lbs_json(Conn *c, const LBSData *data) {
         return -1;
     }
     
-    JsonWriter *writer = json_writer_create("lbs_data.json");
-    if (!writer) {
-        log_parsing_error("Failed to create JSON writer", __LINE__);
+    cJSON *json = create_lbs_json_object(c, data);
+    if (!json) {
+        log_parsing_error("Failed to create JSON object", __LINE__);
         return -1;
     }
     
-        json_writer_start_object(writer);
-        
-        // Add device info
-        if (c->has_login_id) {
-            json_writer_add_string(writer, "device_id", c->login_id);
-        }
-        
-        // Add datetime from packet
-    char datetime_str[DATETIME_STRING_SIZE];
-        snprintf(datetime_str, sizeof(datetime_str), "%04d-%02d-%02d %02d:%02d:%02d", 
-            data->year, data->month, data->day, data->hour, data->minute, data->second);
-        json_writer_add_string(writer, "packet_datetime", datetime_str);
-        
-        // Add WiFi data
-    json_writer_add_int(writer, "wifi_count", data->wifi_count);
+    int result = write_json_to_file(json, "lbs_data.json");
+    if (result != 0) {
+        log_parsing_error("Failed to write JSON to file", __LINE__);
+    }
     
-    // Add LBS data with unique count
-    json_writer_add_int(writer, "original_lbs_count", data->original_lbs_count);
-    json_writer_add_int(writer, "unique_lbs_count", data->unique_lbs_count);
-    json_writer_add_int(writer, "mcc", data->mcc);
-    json_writer_add_int(writer, "mnc", data->mnc);
-    
-    // Add base stations array with only unique cell IDs
-        json_writer_start_array(writer, "base_stations");
-    for (int i = 0; i < data->unique_lbs_count; i++) {
-            if (i > 0) fprintf(writer->file, ",\n");
-            fprintf(writer->file, "    {\n");
-        fprintf(writer->file, "      \"lac\": %u,\n", data->unique_cells[i].lac);
-        fprintf(writer->file, "      \"cell_id\": %u,\n", data->unique_cells[i].cell_id);
-        fprintf(writer->file, "      \"rssi\": %d", data->unique_cells[i].rssi);
-            fprintf(writer->file, "\n    }");
-        }
-        json_writer_end_array(writer);
-        
-        // Add alarm if present
-    if (data->has_alarm) {
-        json_writer_add_hex(writer, "alarm", data->alarm);
-        }
-        
-        json_writer_end_object(writer);
-        fprintf(writer->file, ",\n"); // Add comma for multiple entries
-        json_writer_destroy(writer);
-    
-    return 0;
+    free_json_object(json);
+    return result;
 }
 
 /**
@@ -330,9 +373,19 @@ int write_lbs_json(Conn *c, const LBSData *data) {
  * @param data LBS data structure to clean up
  */
 void cleanup_lbs_data(LBSData *data) {
-    if (data && data->unique_cells) {
-        free(data->unique_cells);
-        data->unique_cells = NULL;
+    if (data) {
+        if (data->unique_cells) {
+            free(data->unique_cells);
+            data->unique_cells = NULL;
+        }
+        if (data->unique_wifis) {
+            free(data->unique_wifis);
+            data->unique_wifis = NULL;
+        }
+        if (data->location) {
+            free(data->location);
+            data->location = NULL;
+        }
     }
 }
 
@@ -399,6 +452,17 @@ void lbs_command(Conn *c, const unsigned char *cmd, int len) {
     if (parse_lbs_data(cmd, len, &data) != 0) {
         cleanup_lbs_data(&data);
         return;
+    }
+
+    // Query Unwired Labs for lat/lon/accuracy/address using unique cells
+    if (lbs_query_unwired(&data) == 0 && data.location && data.location->is_resolved) {
+        printf("%s LBS resolved lat/lon: %.6f, %.6f, accuracy: %.1fm\n", 
+               LOG_PREFIX, data.location->lat, data.location->lon, data.location->accuracy_m);
+        if (data.location->address[0] != '\0') {
+            printf("%s Address: %s\n", LOG_PREFIX, data.location->address);
+        }
+    } else {
+        printf("%s LBS location not resolved from provided cells\n", LOG_PREFIX);
     }
     
     // Skipping JSON write per request
