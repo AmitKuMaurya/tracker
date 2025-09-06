@@ -26,8 +26,29 @@ cJSON* create_lbs_json_object(void *c, const void *data) {
              lbs_data->year, lbs_data->month, lbs_data->day, lbs_data->hour, lbs_data->minute, lbs_data->second);
     cJSON_AddStringToObject(json, "packet_datetime", datetime_str);
     
-    // Add WiFi data
-    cJSON_AddNumberToObject(json, "wifi_count", lbs_data->wifi_count);
+    // Add WiFi data with unique count
+    cJSON_AddNumberToObject(json, "original_wifi_count", lbs_data->original_wifi_count);
+    cJSON_AddNumberToObject(json, "unique_wifi_count", lbs_data->unique_wifi_count);
+    
+    // Add WiFi hotspots array with only unique MAC addresses
+    cJSON *wifi_hotspots = cJSON_CreateArray();
+    if (wifi_hotspots) {
+        for (int i = 0; i < lbs_data->unique_wifi_count; i++) {
+            cJSON *hotspot = cJSON_CreateObject();
+            if (hotspot) {
+                // Format MAC address as string
+                char mac_str[18]; // XX:XX:XX:XX:XX:XX
+                snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
+                         lbs_data->unique_wifis[i].mac[0], lbs_data->unique_wifis[i].mac[1],
+                         lbs_data->unique_wifis[i].mac[2], lbs_data->unique_wifis[i].mac[3],
+                         lbs_data->unique_wifis[i].mac[4], lbs_data->unique_wifis[i].mac[5]);
+                cJSON_AddStringToObject(hotspot, "mac", mac_str);
+                cJSON_AddNumberToObject(hotspot, "rssi", lbs_data->unique_wifis[i].rssi);
+                cJSON_AddItemToArray(wifi_hotspots, hotspot);
+            }
+        }
+        cJSON_AddItemToObject(json, "wifi_hotspots", wifi_hotspots);
+    }
     
     // Add LBS data with unique count
     cJSON_AddNumberToObject(json, "original_lbs_count", lbs_data->original_lbs_count);
@@ -98,4 +119,130 @@ void free_json_object(cJSON *json) {
     if (json) {
         cJSON_Delete(json);
     }
+}
+
+char* create_google_geolocation_payload(const void *data) {
+    const LBSData *lbs_data = (const LBSData *)data;
+    if (!lbs_data) {
+        return NULL;
+    }
+    
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        return NULL;
+    }
+    
+    // Add basic parameters
+    cJSON_AddNumberToObject(root, "homeMobileCountryCode", lbs_data->mcc);
+    cJSON_AddNumberToObject(root, "homeMobileNetworkCode", lbs_data->mnc);
+    cJSON_AddStringToObject(root, "radioType", "gsm");
+    cJSON_AddBoolToObject(root, "considerIp", cJSON_True);
+    
+    // Add cell towers if available
+    if (lbs_data->unique_lbs_count > 0 && lbs_data->unique_cells) {
+        cJSON *cell_towers = cJSON_CreateArray();
+        if (cell_towers) {
+            for (int i = 0; i < lbs_data->unique_lbs_count; i++) {
+                cJSON *tower = cJSON_CreateObject();
+                if (tower) {
+                    cJSON_AddNumberToObject(tower, "cellId", lbs_data->unique_cells[i].cell_id);
+                    cJSON_AddNumberToObject(tower, "locationAreaCode", lbs_data->unique_cells[i].lac);
+                    cJSON_AddNumberToObject(tower, "mobileCountryCode", lbs_data->mcc);
+                    cJSON_AddNumberToObject(tower, "mobileNetworkCode", lbs_data->mnc);
+                    cJSON_AddNumberToObject(tower, "signalStrength", lbs_data->unique_cells[i].rssi);
+                    cJSON_AddNumberToObject(tower, "age", 0);
+                    cJSON_AddNumberToObject(tower, "timingAdvance", 0);
+                    cJSON_AddItemToArray(cell_towers, tower);
+                }
+            }
+            cJSON_AddItemToObject(root, "cellTowers", cell_towers);
+        }
+    }
+    
+    // Add WiFi access points if available
+    if (lbs_data->unique_wifi_count > 0 && lbs_data->unique_wifis) {
+        cJSON *wifi_access_points = cJSON_CreateArray();
+        if (wifi_access_points) {
+            for (int i = 0; i < lbs_data->unique_wifi_count; i++) {
+                cJSON *ap = cJSON_CreateObject();
+                if (ap) {
+                    // Format MAC address as string (lowercase for Google API)
+                    char mac_str[18]; // xx:xx:xx:xx:xx:xx
+                    snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
+                             lbs_data->unique_wifis[i].mac[0], lbs_data->unique_wifis[i].mac[1],
+                             lbs_data->unique_wifis[i].mac[2], lbs_data->unique_wifis[i].mac[3],
+                             lbs_data->unique_wifis[i].mac[4], lbs_data->unique_wifis[i].mac[5]);
+                    
+                    cJSON_AddStringToObject(ap, "macAddress", mac_str);
+                    cJSON_AddNumberToObject(ap, "signalStrength", lbs_data->unique_wifis[i].rssi);
+                    cJSON_AddNumberToObject(ap, "age", 0);
+                    cJSON_AddNumberToObject(ap, "channel", 0);
+                    cJSON_AddNumberToObject(ap, "signalToNoiseRatio", 0);
+                    cJSON_AddItemToArray(wifi_access_points, ap);
+                }
+            }
+            cJSON_AddItemToObject(root, "wifiAccessPoints", wifi_access_points);
+        }
+    }
+    
+    char *json_string = cJSON_Print(root);
+    cJSON_Delete(root);
+    
+    return json_string;
+}
+
+int parse_google_geolocation_response(const char *json, double *lat, double *lon, double *accuracy_m) {
+    if (!json || !lat || !lon) {
+        return -1;
+    }
+    
+    cJSON *root = cJSON_Parse(json);
+    if (!root) {
+        printf("JSON_WRITER: Failed to parse Google API response\n");
+        return -1;
+    }
+    
+    // Check for error in response
+    cJSON *error = cJSON_GetObjectItem(root, "error");
+    if (error) {
+        cJSON *message = cJSON_GetObjectItem(error, "message");
+        if (message && cJSON_IsString(message)) {
+            printf("JSON_WRITER: Google API Error: %s\n", message->valuestring);
+        }
+        cJSON_Delete(root);
+        return -1;
+    }
+    
+    // Parse location data
+    cJSON *location = cJSON_GetObjectItem(root, "location");
+    if (!location) {
+        printf("JSON_WRITER: No location data in Google API response\n");
+        cJSON_Delete(root);
+        return -1;
+    }
+    
+    cJSON *lat_json = cJSON_GetObjectItem(location, "lat");
+    cJSON *lng_json = cJSON_GetObjectItem(location, "lng");
+    
+    if (!lat_json || !lng_json || !cJSON_IsNumber(lat_json) || !cJSON_IsNumber(lng_json)) {
+        printf("JSON_WRITER: Invalid latitude/longitude in Google API response\n");
+        cJSON_Delete(root);
+        return -1;
+    }
+    
+    *lat = lat_json->valuedouble;
+    *lon = lng_json->valuedouble;
+    
+    // Parse accuracy (optional)
+    if (accuracy_m) {
+        cJSON *accuracy_json = cJSON_GetObjectItem(root, "accuracy");
+        if (accuracy_json && cJSON_IsNumber(accuracy_json)) {
+            *accuracy_m = accuracy_json->valuedouble;
+        } else {
+            *accuracy_m = 0.0; // Default if not provided
+        }
+    }
+    
+    cJSON_Delete(root);
+    return 0;
 }
