@@ -1,0 +1,13 @@
+cat > .gitignore << 'EOF'
+# ignore compiled object files
+*.o
+*.out
+*.exe
+
+# common build folders
+obj/
+
+
+# logs and temporary
+*.log
+EOF

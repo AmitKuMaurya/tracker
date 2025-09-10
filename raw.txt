@@ -1,0 +1,146 @@
+// Add this function prototype near the other function prototypes
+void gps_command(Conn *c, const unsigned char *cmd, int len);
+
+// Update the command_action function to call gps_command for protocol 0x10
+void command_action(Conn *c, const char *cmd, int len) {
+    printf("command_action: got frame of %d bytes: ", len);
+    for (int i = 0; i < len; i++)
+        printf("%02X ", (unsigned char)cmd[i]);
+    printf("\n");
+    
+    if (len > 4) {
+        unsigned char proto = (unsigned char)cmd[3];
+        if (proto == 0x01) {
+            printf("login command received\n");
+            login_command(c, (const unsigned char *)cmd, len);
+        } else if (proto == 0x08) {
+            printf("heartbeat command received\n");
+        } else if (proto == 0x10) {
+            printf("GPS online command received\n");
+            gps_command(c, (const unsigned char *)cmd, len);
+        }
+    }
+}
+
+// GPS command parser function
+void gps_command(Conn *c, const unsigned char *cmd, int len) {
+    // Minimum length check: 78 78 + len(1) + proto(1) + datetime(6) + gps_info(1) + lat_long(8) + speed(1) + status_heading(2) + terminator(2)
+    if (len < 24) {
+        printf("GPS command too short: %d bytes\n", len);
+        return;
+    }
+    
+    // Extract status and heading bytes (position depends on protocol version)
+    // For basic 0x10 protocol, status/heading is at position: 2(header) + 1(len) + 1(proto) + 6(datetime) + 1(gps_info) + 8(lat_long) + 1(speed) = 20
+    int status_pos = 20;
+    if (status_pos + 1 >= len) {
+        printf("Invalid GPS command length for status extraction\n");
+        return;
+    }
+    
+    unsigned char status_byte1 = cmd[status_pos];
+    unsigned char status_byte2 = cmd[status_pos + 1];
+    
+    // Check if GPS is positioned (bit 4 of first status byte)
+    // According to protocol: bit 4 (0-indexed from left) indicates GPS positioning status
+    // 0 = GPS not positioned, 1 = GPS positioned
+    int is_positioned = (status_byte1 & 0x08) != 0; // Mask with 00001000 (bit 3 from right)
+    
+    if (!is_positioned) {
+        printf("GPS not positioned, skipping data processing\n");
+        
+        // Still need to reply to the device as required by protocol
+        unsigned char response[] = {0x78, 0x78, 0x00, 0x10, 
+                                   cmd[4], cmd[5], cmd[6], cmd[7], cmd[8], cmd[9], // Copy datetime
+                                   0x0D, 0x0A};
+        send(c->fd, response, sizeof(response), 0);
+        return;
+    }
+    
+    printf("GPS is positioned, processing data...\n");
+    
+    // Parse datetime (BCD encoded)
+    // Position: 4-9 (after 78 78 len proto)
+    int year = (cmd[4] >> 4) * 10 + (cmd[4] & 0x0F) + 2000;
+    int month = (cmd[5] >> 4) * 10 + (cmd[5] & 0x0F);
+    int day = (cmd[6] >> 4) * 10 + (cmd[6] & 0x0F);
+    int hour = (cmd[7] >> 4) * 10 + (cmd[7] & 0x0F);
+    int minute = (cmd[8] >> 4) * 10 + (cmd[8] & 0x0F);
+    int second = (cmd[9] >> 4) * 10 + (cmd[9] & 0x0F);
+    
+    printf("DateTime: %04d-%02d-%02d %02d:%02d:%02d (GMT+0)\n", 
+           year, month, day, hour, minute, second);
+    
+    // Parse latitude and longitude (positions 11-18)
+    // GPS info byte at position 10 contains length and satellite count
+    unsigned char gps_info = cmd[10];
+    int gps_data_length = (gps_info >> 4) & 0x0F;
+    int satellite_count = gps_info & 0x0F;
+    printf("GPS data length: %d, Satellites: %d\n", gps_data_length, satellite_count);
+    
+    // Extract latitude (4 bytes) and longitude (4 bytes)
+    uint32_t latitude_raw = (cmd[11] << 24) | (cmd[12] << 16) | (cmd[13] << 8) | cmd[14];
+    uint32_t longitude_raw = (cmd[15] << 24) | (cmd[16] << 16) | (cmd[17] << 8) | cmd[18];
+    
+    // Convert to degrees (divide by 30000 to get minutes, then convert to degrees)
+    double latitude_minutes = latitude_raw / 30000.0;
+    double longitude_minutes = longitude_raw / 30000.0;
+    
+    double latitude_degrees = floor(latitude_minutes / 60.0);
+    double latitude_decimal = latitude_degrees + (latitude_minutes - (latitude_degrees * 60.0)) / 60.0;
+    
+    double longitude_degrees = floor(longitude_minutes / 60.0);
+    double longitude_decimal = longitude_degrees + (longitude_minutes - (longitude_degrees * 60.0)) / 60.0;
+    
+    // Check direction from status byte
+    int is_north = (status_byte1 & 0x04) != 0; // Bit 5: 0=South, 1=North
+    int is_west = (status_byte1 & 0x02) != 0;   // Bit 6: 0=East, 1=West
+    
+    if (!is_north) {
+        latitude_decimal = -latitude_decimal; // South latitude is negative
+    }
+    if (is_west) {
+        longitude_decimal = -longitude_decimal; // West longitude is negative
+    }
+    
+    printf("Latitude: %.6f %s\n", latitude_decimal, is_north ? "N" : "S");
+    printf("Longitude: %.6f %s\n", longitude_decimal, is_west ? "W" : "E");
+    
+    // Parse speed (1 byte)
+    unsigned char speed_kmh = cmd[19];
+    printf("Speed: %d km/h\n", speed_kmh);
+    
+    // Parse heading (from status bytes)
+    // Heading is stored in the last 10 bits of the two status bytes
+    int heading = ((status_byte1 & 0x03) << 8) | status_byte2;
+    printf("Heading: %d degrees\n", heading);
+    
+    // Check for altitude and alarm in extended protocol (V1.2+)
+    if (len >= 27) { // Check if we have extended data
+        // Altitude is 2 bytes at position 22-23
+        int16_t altitude = (cmd[22] << 8) | cmd[23];
+        printf("Altitude: %d meters\n", altitude);
+        
+        // Alarm byte at position 24
+        if (len >= 25) {
+            unsigned char alarm_byte = cmd[24];
+            printf("Alarm status: 0x%02X\n", alarm_byte);
+            
+            if (alarm_byte & 0x01) printf("  - Vibration alarm\n");
+            if (alarm_byte & 0x02) printf("  - Speeding alarm\n");
+            if (alarm_byte & 0x04) printf("  - WiFi attendance alarm\n");
+            if (alarm_byte & 0x08) printf("  - Leave WiFi attendance alarm\n");
+            if (alarm_byte & 0x10) printf("  - Low power alarm\n");
+            if (alarm_byte & 0x20) printf("  - On duty alarm\n");
+            if (alarm_byte & 0x40) printf("  - Off duty alarm\n");
+        }
+    }
+    
+    // Reply to device as required by protocol
+    unsigned char response[] = {0x78, 0x78, 0x00, 0x10, 
+                               cmd[4], cmd[5], cmd[6], cmd[7], cmd[8], cmd[9], // Copy datetime
+                               0x0D, 0x0A};
+    send(c->fd, response, sizeof(response), 0);
+    
+    printf("GPS data processed and reply sent\n");
+}
