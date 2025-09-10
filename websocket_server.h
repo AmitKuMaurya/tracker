@@ -6,7 +6,7 @@
 #include <pthread.h>
 #include "login_map.h"
 #include <unistd.h>
-#define WS_PORT 8081
+#define WS_PORT 8082
 #define WS_MAX_EVENTS 1000
 #define WS_BUF_SIZE 4096
 
