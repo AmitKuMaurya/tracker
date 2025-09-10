@@ -275,23 +275,24 @@ int handle_websocket_handshake(int fd) {
     while (*key_header == ' ') key_header++; // skip spaces
 
     char client_key[128];
+    printf("client_key: %s\n", key_header);
     sscanf(key_header, "%127s", client_key);
 
     // Append GUID
     const char *guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
     char combined[256];
     snprintf(combined, sizeof(combined), "%s%s", client_key, guid);
-
+    printf("combined: %s\n", combined);
     // SHA1 hash
     unsigned char sha1_result[SHA_DIGEST_LENGTH];
     SHA1((unsigned char *)combined, strlen(combined), sha1_result);
-
+    printf("sha1_result: %s\n", sha1_result);
     // Base64 encode
     char accept_key[256];
     if (base64_encode(sha1_result, SHA_DIGEST_LENGTH, accept_key, sizeof(accept_key)) < 0) {
         return -1;
     }
-
+    printf("accept_key: %s\n", accept_key);
     // Build response
     char response[512];
     snprintf(response, sizeof(response),
