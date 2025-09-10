@@ -71,6 +71,13 @@ int websocket_server_init(void) {
         return -1;
     }
     
+    // Make server socket non-blocking
+    if (make_socket_non_blocking(g_ws_server.server_fd) == -1) {
+        perror("WebSocket make non-blocking (server)");
+        close(g_ws_server.server_fd);
+        return -1;
+    }
+    
     // Create epoll instance
     g_ws_server.epoll_fd = epoll_create1(0);
     if (g_ws_server.epoll_fd == -1) {
@@ -264,6 +271,39 @@ int handle_websocket_handshake(int fd) {
         return -1;
     }
     buffer[bytes] = '\0';
+
+    // Extract IMEI from query parameters
+    char *request_line = strstr(buffer, "GET ");
+    if (request_line) {
+        char *url_start = request_line + 4; // Skip "GET "
+        char *url_end = strstr(url_start, " HTTP/");
+        if (url_end) {
+            *url_end = '\0'; // Null terminate the URL
+            
+            // Look for imei parameter
+            char *imei_param = strstr(url_start, "imei=");
+            if (imei_param) {
+                imei_param += 5; // Skip "imei="
+                char *imei_end = strchr(imei_param, '&');
+                if (imei_end) {
+                    *imei_end = '\0';
+                }
+                
+                // Find the connection and store IMEI
+                pthread_mutex_lock(&g_ws_connections_mutex);
+                for (int i = 0; i < MAX_WS_CONNECTIONS; i++) {
+                    if (g_ws_connections[i].fd == fd) {
+                        strncpy(g_ws_connections[i].imei, imei_param, sizeof(g_ws_connections[i].imei) - 1);
+                        g_ws_connections[i].imei[sizeof(g_ws_connections[i].imei) - 1] = '\0';
+                        g_ws_connections[i].has_imei = 1;
+                        printf("WebSocket: IMEI %s registered for fd=%d\n", g_ws_connections[i].imei, fd);
+                        break;
+                    }
+                }
+                pthread_mutex_unlock(&g_ws_connections_mutex);
+            }
+        }
+    }
 
     // Look for Sec-WebSocket-Key
     char *key_header = strstr(buffer, "Sec-WebSocket-Key:");
