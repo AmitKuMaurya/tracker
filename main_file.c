@@ -16,7 +16,7 @@
 #include "data_processing.h"
 #include "websocket_server.h"
 
-#define PORT 12345
+#define PORT 8081
 #define MAX_EVENTS 10000   // maximum epoll events
 #define BUF_SIZE 4096      // buffer size per connection
 // Utility: make socket non-blocking
@@ -108,7 +108,7 @@ int reset_connection_timer(Conn *c) {
     // Update last activity timestamp
     c->last_activity = time(NULL);
     
-    printf("TIMER: Reset timeout timer for connection fd=%d\n", c->fd);
+    printf("TIMER: Reset timeout timer for connection imei=%s\n", c->login_id);
     return 0;
 }
 

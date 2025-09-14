@@ -598,7 +598,7 @@ static void extract_imei_from_handshake(int fd, const char *buffer) {
         if (url_end) {
             // Create a copy of the URL to avoid modifying the original buffer
             size_t url_len = url_end - url_start;
-            char url_copy[512];
+            char url_copy[2048]; // Match the handshake buffer size
             if (url_len < sizeof(url_copy)) {
                 strncpy(url_copy, url_start, url_len);
                 url_copy[url_len] = '\0';
