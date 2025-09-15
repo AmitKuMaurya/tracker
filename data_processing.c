@@ -18,7 +18,7 @@
 #include "gps_data.h"
 #include "login_map.h"
 #include "offline_data.h"
-
+#include "websocket_server.h"
 /* Constants */
 #define FRAME_HEADER_SIZE 2
 #define FRAME_TERMINATOR_SIZE 2
@@ -202,7 +202,8 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
     imei[digit_index] = '\0';
     
     // Store IMEI in connection structure
-    snprintf(c->login_id, sizeof(c->login_id), "%s", imei + (digit_index - 10));
+    snprintf(c->login_id, sizeof(c->login_id), "%s", imei);
+    websocket_send_to_imei(c->login_id, "Device is online", strlen("Device is online"));
     c->has_login_id = 1;
     
     printf("DATA_PROC: Device login - IMEI: %s, fd: %d\n", c->login_id, c->fd);
