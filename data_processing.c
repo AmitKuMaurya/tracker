@@ -184,7 +184,7 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
     
     // Extract IMEI from BCD format (8 bytes starting at position 4)
     const unsigned char *imei_bcd = cmd + 4;
-    char imei[16]; // 15 digits + null terminator
+    char imei[17]; // 16 digits + null terminator
     int digit_index = 0;
     
     for (int i = 0; i < 8 && digit_index < 10; i++) {
@@ -195,14 +195,14 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
         if (high <= 9) {
             imei[digit_index++] = '0' + high;
         }
-        if (digit_index < 15 && low <= 9) {
+        if (digit_index < 16 && low <= 9) {
             imei[digit_index++] = '0' + low;
         }
     }
     imei[digit_index] = '\0';
     
     // Store IMEI in connection structure
-    snprintf(c->login_id, sizeof(c->login_id), "%s", imei);
+    snprintf(c->login_id, sizeof(c->login_id), "%s", imei + (digit_index - 16));
     websocket_send_to_imei(c->login_id, "Device is online", strlen("Device is online"));
     c->has_login_id = 1;
     
