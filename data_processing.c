@@ -187,7 +187,7 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
     char imei[16]; // 15 digits + null terminator
     int digit_index = 0;
     
-    for (int i = 0; i < 8 && digit_index < 15; i++) {
+    for (int i = 0; i < 8 && digit_index < 10; i++) {
         unsigned char byte = imei_bcd[i];
         unsigned char high = (byte >> 4) & 0x0F;
         unsigned char low = byte & 0x0F;
@@ -202,8 +202,7 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
     imei[digit_index] = '\0';
     
     // Store IMEI in connection structure
-    strncpy(c->login_id, imei, sizeof(c->login_id) - 1);
-    c->login_id[sizeof(c->login_id) - 1] = '\0';
+    snprintf(c->login_id, sizeof(c->login_id), "%s", imei + (digit_index - 10));
     c->has_login_id = 1;
     
     printf("DATA_PROC: Device login - IMEI: %s, fd: %d\n", c->login_id, c->fd);

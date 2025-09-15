@@ -30,7 +30,7 @@ static size_t write_memory_callback(void *contents, size_t size, size_t nmemb, v
 }
 
 
-int lbs_query_unwired(LBSData *data) {
+int lbs_query_google(LBSData *data) {
     if (!data) {
         return -1;
     }

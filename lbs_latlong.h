@@ -13,7 +13,7 @@
  * @param data In/out LBSData containing MCC, MNC, unique_cells, and unique_wifis
  * @return 0 on success, -1 on failure (no valid response or API error)
  */
-int lbs_query_unwired(LBSData *data);
+int lbs_query_google(LBSData *data);
 
 #endif // LBS_LATLONG_H
 

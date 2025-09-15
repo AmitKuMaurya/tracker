@@ -40,6 +40,7 @@ static int base64_encode(const unsigned char *input, size_t input_len,
 static void remove_websocket_connection(int fd);
 static void cleanup_websocket_connection(int fd);
 static void extract_imei_from_handshake(int fd, const char *buffer);
+bool device_online_status(const char *imei);
 
 int websocket_server_init(void) {
     memset(&g_ws_server, 0, sizeof(g_ws_server));
@@ -612,6 +613,12 @@ static void extract_imei_from_handshake(int fd, const char *buffer) {
                         *imei_end = '\0';
                     }
                     
+                    // Send online status to client
+                    if (!device_online_status(imei_param)) {
+                        websocket_send_to_imei(imei_param, "Device is offline", strlen("Device is offline"));
+                    }else{
+                        websocket_send_to_imei(imei_param, "Device is online", strlen("Device is online"));
+                    }
                     // Find the connection and store IMEI
                     pthread_mutex_lock(&g_ws_connections_mutex);
                     for (int i = 0; i < MAX_WS_CONNECTIONS; i++) {
@@ -628,4 +635,8 @@ static void extract_imei_from_handshake(int fd, const char *buffer) {
             }
         }
     }
+}
+
+bool device_online_status(const char *imei) {
+    return (imei && login_map_get(imei) != NULL);
 }

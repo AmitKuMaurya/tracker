@@ -3,7 +3,7 @@
 #include "conn.h"
 #include "login_map.h"
 
-#define LOGIN_MAP_CAPACITY 8192
+#define LOGIN_MAP_CAPACITY 1024
 typedef struct {
     int in_use;
     char login_id[32];
@@ -63,5 +63,3 @@ const char * login_map_get_login_id_by_fd(int fd) {
     }
     return NULL;
 }
-
-
