@@ -187,7 +187,7 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
     char imei[17]; // 16 digits + null terminator
     int digit_index = 0;
     
-    for (int i = 0; i < 8 && digit_index < 10; i++) {
+    for (int i = 0; i < 8 && digit_index < 16; i++) {
         unsigned char byte = imei_bcd[i];
         unsigned char high = (byte >> 4) & 0x0F;
         unsigned char low = byte & 0x0F;
@@ -201,8 +201,10 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
     }
     imei[digit_index] = '\0';
     
-    // Store IMEI in connection structure
-    snprintf(c->login_id, sizeof(c->login_id), "%s", imei + (digit_index - 16));
+    // Store last 15 digits of IMEI in connection structure
+    int num_digits = digit_index;
+    const char *last15 = (num_digits >= 15) ? (imei + (num_digits - 15)) : imei;
+    snprintf(c->login_id, sizeof(c->login_id), "%.15s", last15);
     websocket_send_to_imei(c->login_id, "Device is online", strlen("Device is online"));
     c->has_login_id = 1;
     
