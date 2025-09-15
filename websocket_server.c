@@ -614,6 +614,7 @@ static void extract_imei_from_handshake(int fd, const char *buffer) {
                     }
                     
                     // Send online status to client
+                    printf("WebSocket: IMEI %s is online\n", imei_param);
                     if (!device_online_status(imei_param)) {
                         websocket_send_to_imei(imei_param, "Device is offline", strlen("Device is offline"));
                     }else{
