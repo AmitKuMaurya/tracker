@@ -184,13 +184,14 @@ static void *websocket_server_thread(void *arg) {
                         if (handle_websocket_handshake(fd) == 0) {
                             conn->state = WS_STATE_OPEN;
                             printf("WebSocket: Handshake complete for fd=%d\n", fd);
-                            if(device_online_status(conn->imei)) {
-                                websocket_send_to_imei(conn->imei, "Device is online", strlen("Device is online"));
-                                printf("WebSocket: IMEI %s is online\n", conn->imei);
-                            } else {
-                                websocket_send_to_imei(conn->imei, "Device is offline", strlen("Device is offline"));
-                                printf("WebSocket: IMEI %s is offline\n", conn->imei);
-                            }
+                            // Check online status and send appropriate message
+                        if (device_online_status(conn->imei)) {
+                             websocket_send_to_imei(conn->imei, "Device is online", strlen("Device is online"));
+                            printf("WebSocket: IMEI %s is online\n", conn->imei);
+                        } else {
+                             websocket_send_to_imei(conn->imei, "Device is offline", strlen("Device is offline"));
+                             printf("WebSocket: IMEI %s is offline\n", conn->imei);
+                        }
                         } else {
                             printf("WebSocket: Handshake failed for fd=%d\n", fd);
                             remove_websocket_connection(fd);
@@ -626,15 +627,6 @@ static void extract_imei_from_handshake(int fd, const char *buffer) {
                     char *imei_end = strchr(imei_param, '&');
                     if (imei_end) {
                         *imei_end = '\0';
-                    }
-                    
-                    // Check online status and send appropriate message
-                    if (device_online_status(imei_param)) {
-                        websocket_send_to_imei(imei_param, "Device is online", strlen("Device is online"));
-                        printf("WebSocket: IMEI %s is online\n", imei_param);
-                    } else {
-                        websocket_send_to_imei(imei_param, "Device is offline", strlen("Device is offline"));
-                        printf("WebSocket: IMEI %s is offline\n", imei_param);
                     }   
                     // Find the connection and store IMEI
                     pthread_mutex_lock(&g_ws_connections_mutex);
