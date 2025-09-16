@@ -274,52 +274,60 @@ int handle_websocket_handshake(int fd) {
     }
     buffer[bytes] = '\0';
 
-
-    // Look for Sec-WebSocket-Key
+    // Look for "Sec-WebSocket-Key"
     char *key_header = strstr(buffer, "Sec-WebSocket-Key:");
     if (!key_header) {
         return -1;
     }
 
+    // Move past the header name
     key_header += strlen("Sec-WebSocket-Key:");
-    while (*key_header == ' ') key_header++; // skip spaces
+    while (*key_header == ' ' || *key_header == '\t') key_header++;
 
+    // Copy key into buffer
     char client_key[128];
-    printf("client_key: %s\n", key_header);
-    sscanf(key_header, "%127s", client_key);
+    strncpy(client_key, key_header, sizeof(client_key) - 1);
+    client_key[sizeof(client_key) - 1] = '\0';
+
+    // Trim CRLF and spaces
+    char *end = strpbrk(client_key, "\r\n");
+    if (end) *end = '\0';
 
     // Append GUID
     const char *guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
     char combined[256];
     snprintf(combined, sizeof(combined), "%s%s", client_key, guid);
-    printf("combined: %s\n", combined);
+
     // SHA1 hash
     unsigned char sha1_result[SHA_DIGEST_LENGTH];
     SHA1((unsigned char *)combined, strlen(combined), sha1_result);
-    printf("sha1_result: %s\n", sha1_result);
+
     // Base64 encode
     char accept_key[256];
     if (base64_encode(sha1_result, SHA_DIGEST_LENGTH, accept_key, sizeof(accept_key)) < 0) {
         return -1;
     }
-    printf("accept_key: %s\n", accept_key);
+
     // Build response
     char response[512];
-    snprintf(response, sizeof(response),
-             "HTTP/1.1 101 Switching Protocols\r\n"
-             "Upgrade: websocket\r\n"
-             "Connection: Upgrade\r\n"
-             "Sec-WebSocket-Accept: %s\r\n\r\n",
-             accept_key);
+    int len = snprintf(response, sizeof(response),
+        "HTTP/1.1 101 Switching Protocols\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Accept: %s\r\n\r\n",
+        accept_key);
 
     // Send response
-    send(fd, response, strlen(response), 0);
+    if (send(fd, response, len, 0) < 0) {
+        return -1;
+    }
 
-    // Extract IMEI from the handshake buffer after successful handshake
+    // Extract IMEI if present in URL
     extract_imei_from_handshake(fd, buffer);
 
     return 0;
 }
+
 
 static int handle_websocket_frame(int fd) {
     char buf[WS_BUF_SIZE];
@@ -617,9 +625,11 @@ static void extract_imei_from_handshake(int fd, const char *buffer) {
                     printf("WebSocket: IMEI %s is online\n", imei_param);
                     if (!device_online_status(imei_param)) {
                         websocket_send_to_imei(imei_param, "Device is offline", strlen("Device is offline"));
+                        printf("WebSocket: IMEI %s is offline\n", imei_param);
                     }else{
                         websocket_send_to_imei(imei_param, "Device is online", strlen("Device is online"));
-                    }
+                        printf("WebSocket: IMEI %s is online\n", imei_param);
+                    }   
                     // Find the connection and store IMEI
                     pthread_mutex_lock(&g_ws_connections_mutex);
                     for (int i = 0; i < MAX_WS_CONNECTIONS; i++) {
