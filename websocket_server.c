@@ -184,6 +184,13 @@ static void *websocket_server_thread(void *arg) {
                         if (handle_websocket_handshake(fd) == 0) {
                             conn->state = WS_STATE_OPEN;
                             printf("WebSocket: Handshake complete for fd=%d\n", fd);
+                            if(device_online_status(conn->imei)) {
+                                websocket_send_to_imei(conn->imei, "Device is online", strlen("Device is online"));
+                                printf("WebSocket: IMEI %s is online\n", conn->imei);
+                            } else {
+                                websocket_send_to_imei(conn->imei, "Device is offline", strlen("Device is offline"));
+                                printf("WebSocket: IMEI %s is offline\n", conn->imei);
+                            }
                         } else {
                             printf("WebSocket: Handshake failed for fd=%d\n", fd);
                             remove_websocket_connection(fd);
