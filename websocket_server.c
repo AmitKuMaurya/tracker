@@ -4,6 +4,8 @@
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <strings.h> // for strncasecmp, strcasestr
+#include <ctype.h> // for tolower
 #include <arpa/inet.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
@@ -29,6 +31,7 @@ static int make_socket_non_blocking(int fd);
 static int accept_websocket_connection(int server_fd);
 static int handle_websocket_handshake(int fd);
 static int handle_websocket_frame(int fd);
+static int contains_case_insensitive(const char *haystack, const char *needle);
 static int parse_websocket_frame(const char *buf, size_t len, 
                                 int *opcode, int *fin, 
                                 char *payload, size_t *payload_len);
@@ -39,7 +42,7 @@ static int base64_encode(const unsigned char *input, size_t input_len,
                         char *output, size_t output_len);
 static void remove_websocket_connection(int fd);
 static void cleanup_websocket_connection(int fd);
-static void extract_imei_from_handshake(int fd, const char *buffer);
+//static void extract_imei_from_handshake(int fd, const char *buffer);
 bool device_online_status(const char *imei);
 
 int websocket_server_init(void) {
@@ -274,67 +277,139 @@ static int accept_websocket_connection(int server_fd) {
     return 0;
 }
 
-int handle_websocket_handshake(int fd) {
-    char buffer[2048];
-    int bytes = recv(fd, buffer, sizeof(buffer) - 1, 0);
-    if (bytes <= 0) {
-        return -1;
-    }
-    buffer[bytes] = '\0';
-
-    // Look for "Sec-WebSocket-Key"
-    char *key_header = strstr(buffer, "Sec-WebSocket-Key:");
-    if (!key_header) {
+static int handle_websocket_handshake(int fd) {
+    char buf[WS_BUF_SIZE];
+    ssize_t len = recv(fd, buf, sizeof(buf) - 1, MSG_DONTWAIT);
+    if (len <= 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return 1;
+        printf("WebSocket: recv failed in handshake: %s\n", strerror(errno));
         return -1;
     }
 
-    // Move past the header name
-    key_header += strlen("Sec-WebSocket-Key:");
-    while (*key_header == ' ' || *key_header == '\t') key_header++;
+    buf[len] = '\0';
+    printf("WebSocket: Received handshake request:\n%s\n", buf);
 
-    // Copy key into buffer
-    char client_key[128];
-    strncpy(client_key, key_header, sizeof(client_key) - 1);
-    client_key[sizeof(client_key) - 1] = '\0';
+    if (strncmp(buf, "GET ", 4) != 0) {
+        printf("WebSocket: Not a GET request\n");
+        return -1;
+    }
 
-    // Trim CRLF and spaces
-    char *end = strpbrk(client_key, "\r\n");
-    if (end) *end = '\0';
+    // Keep an untouched copy for later parsing
+    char original_buf[WS_BUF_SIZE];
+    strncpy(original_buf, buf, sizeof(original_buf) - 1);
+    original_buf[sizeof(original_buf) - 1] = '\0';
 
-    // Append GUID
-    const char *guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-    char combined[256];
-    snprintf(combined, sizeof(combined), "%s%s", client_key, guid);
+    // Extract IMEI from the request line
+    char *request_line_end = strstr(buf, "\r\n");
+    if (request_line_end) *request_line_end = '\0';
+    char *space1 = strchr(buf, ' ');
+    char *space2 = space1 ? strchr(space1 + 1, ' ') : NULL;
+    if (!space1 || !space2) {
+        printf("WebSocket: Malformed request line\n");
+        return -1;
+    }
+    *space2 = '\0';
+    const char *url = space1 + 1; // "/ws?imei=..."
+    const char *imei_q = strstr(url, "imei=");
+    char normalized_imei[32] = {0};
+    if (imei_q) {
+        imei_q += 5;
+        const char *amp = strchr(imei_q, '&');
+        size_t imei_len = amp ? (size_t)(amp - imei_q) : strlen(imei_q);
+        if (imei_len >= sizeof(normalized_imei)) imei_len = sizeof(normalized_imei) - 1;
+        char imei_tmp[32];
+        strncpy(imei_tmp, imei_q, imei_len);
+        imei_tmp[imei_len] = '\0';
+        size_t tmp_len = strlen(imei_tmp);
+        const char *last15 = (tmp_len > 15) ? (imei_tmp + (tmp_len - 15)) : imei_tmp;
+        snprintf(normalized_imei, sizeof(normalized_imei), "%s", last15);
+    }
 
-    // SHA1 hash
-    unsigned char sha1_result[SHA_DIGEST_LENGTH];
-    SHA1((unsigned char *)combined, strlen(combined), sha1_result);
+    // Now parse headers (use original_buf since buf was modified)
+    int upgrade_found = 0;
+    int connection_found = 0;
+    char client_key[256] = {0};
 
-    // Base64 encode
+    char *headers = strstr(original_buf, "\r\n");
+    if (!headers) return -1;
+    headers += 2; // Move past request line CRLF
+
+    char *line = strtok(headers, "\r\n");
+    while (line) {
+        if (strncasecmp(line, "Upgrade:", 8) == 0) {
+            if (contains_case_insensitive(line, "websocket")) upgrade_found = 1;
+        } else if (strncasecmp(line, "Connection:", 11) == 0) {
+            if (contains_case_insensitive(line, "upgrade")) connection_found = 1;
+        } else if (strncasecmp(line, "Sec-WebSocket-Key:", 18) == 0) {
+            const char *value = line + 18;
+            while (*value == ' ') value++;
+            strncpy(client_key, value, sizeof(client_key) - 1);
+            client_key[sizeof(client_key) - 1] = '\0';
+        }
+        line = strtok(NULL, "\r\n");
+    }
+
+    if (!upgrade_found || !connection_found || client_key[0] == '\0') {
+        printf("WebSocket: Missing required headers (Upgrade/Connection/Key)\n");
+        return -1;
+    }
+
+    // Create Sec-WebSocket-Accept
+    char combined_key[256];
+    snprintf(combined_key, sizeof(combined_key), "%s%s", client_key, WS_MAGIC_STRING);
+    unsigned char sha1_hash[SHA_DIGEST_LENGTH];
+    SHA1((unsigned char *)combined_key, strlen(combined_key), sha1_hash);
     char accept_key[256];
-    if (base64_encode(sha1_result, SHA_DIGEST_LENGTH, accept_key, sizeof(accept_key)) < 0) {
-        return -1;
-    }
+    base64_encode(sha1_hash, SHA_DIGEST_LENGTH, accept_key, sizeof(accept_key));
 
-    // Build response
+    // Send handshake response
     char response[512];
-    int len = snprintf(response, sizeof(response),
+    int resp_len = snprintf(response, sizeof(response),
         "HTTP/1.1 101 Switching Protocols\r\n"
         "Upgrade: websocket\r\n"
         "Connection: Upgrade\r\n"
-        "Sec-WebSocket-Accept: %s\r\n\r\n",
+        "Sec-WebSocket-Accept: %s\r\n"
+        "\r\n",
         accept_key);
-
-    // Send response
-    if (send(fd, response, len, 0) < 0) {
+    ssize_t sent = send(fd, response, resp_len, 0);
+    if (sent != resp_len) {
+        printf("WebSocket: Failed to send complete response: %zd/%d bytes\n", sent, resp_len);
         return -1;
     }
 
-    // Extract IMEI if present in URL
-    extract_imei_from_handshake(fd, buffer);
+    // Store IMEI on the connection if available
+    if (normalized_imei[0] != '\0') {
+        pthread_mutex_lock(&g_ws_connections_mutex);
+        for (int i = 0; i < MAX_WS_CONNECTIONS; i++) {
+            if (g_ws_connections[i].fd == fd) {
+                strncpy(g_ws_connections[i].imei, normalized_imei, sizeof(g_ws_connections[i].imei) - 1);
+                g_ws_connections[i].imei[sizeof(g_ws_connections[i].imei) - 1] = '\0';
+                g_ws_connections[i].has_imei = 1;
+                break;
+            }
+        }
+        pthread_mutex_unlock(&g_ws_connections_mutex);
+    }
 
     return 0;
 }
+
+// Simple case-insensitive substring check to avoid non-standard strcasestr
+static int contains_case_insensitive(const char *haystack, const char *needle) {
+    if (!haystack || !needle || !*needle) return 0;
+    size_t nlen = strlen(needle);
+    for (const char *p = haystack; *p; p++) {
+        size_t i = 0;
+        while (i < nlen && p[i] && tolower((unsigned char)p[i]) == tolower((unsigned char)needle[i])) {
+            i++;
+        }
+        if (i == nlen) return 1;
+    }
+    return 0;
+}
+ 
+
+
 
 
 static int handle_websocket_frame(int fd) {
@@ -606,7 +681,7 @@ static int make_socket_non_blocking(int fd) {
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
-static void extract_imei_from_handshake(int fd, const char *buffer) {
+/*static void extract_imei_from_handshake(int fd, const char *buffer) {
     // Extract IMEI from query parameters
     char *request_line = strstr(buffer, "GET ");
     if (request_line) {
@@ -644,7 +719,7 @@ static void extract_imei_from_handshake(int fd, const char *buffer) {
             }
         }
     }
-}
+}*/
 
 bool device_online_status(const char *imei) {
     if (!imei) return false;

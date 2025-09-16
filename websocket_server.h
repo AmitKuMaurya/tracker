@@ -10,6 +10,8 @@
 #define WS_PORT 8082
 #define WS_MAX_EVENTS 1000
 #define WS_BUF_SIZE 4096
+// WebSocket GUID used to compute Sec-WebSocket-Accept
+#define WS_MAGIC_STRING "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 // WebSocket opcodes
 #define WS_OP_CONTINUATION 0x0
