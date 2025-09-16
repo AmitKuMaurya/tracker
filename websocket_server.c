@@ -649,19 +649,7 @@ static void extract_imei_from_handshake(int fd, const char *buffer) {
 bool device_online_status(const char *imei) {
     if (!imei) return false;
     
-    // Check if there's an active WebSocket connection for this IMEI
-    pthread_mutex_lock(&g_ws_connections_mutex);
-    for (int i = 0; i < MAX_WS_CONNECTIONS; i++) {
-        if (g_ws_connections[i].fd != -1 && 
-            g_ws_connections[i].has_imei &&
-            g_ws_connections[i].state == WS_STATE_OPEN &&
-            strcmp(g_ws_connections[i].imei, imei) == 0) {
-            pthread_mutex_unlock(&g_ws_connections_mutex);
-            return true;
-        }
-    }
-    pthread_mutex_unlock(&g_ws_connections_mutex);
-    
     // Also check if there's a TCP connection in the login map
+    
     return (login_map_get(imei) != NULL);
 }
