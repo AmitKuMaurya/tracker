@@ -27,7 +27,8 @@
 /* Static function prototypes */
 static int extract_frame(Conn *c, int start_pos, int *frame_len);
 static void log_frame_data(const char *frame, int len);
-
+static unsigned char int_to_bcd(int val);
+void send_time_sync_response(Conn *c);
 /**
  * @brief Process input buffer and extract complete frames
  */
@@ -144,6 +145,11 @@ void dispatch_command(Conn *c, const char *cmd, int len) {
         case 0x19:
             printf("DATA_PROC: LBS command received (0x%02X)\n", protocol);
             lbs_command(c, (const unsigned char *)cmd, len);
+
+            break;
+        case 0x30:
+            printf("DATA_PROC: Time synchronization command received\n");
+            send_time_sync_response(c);
             break;
             
         default:
@@ -285,4 +291,40 @@ int send_device_response(Conn *c, unsigned char protocol, const unsigned char *d
     printf("DATA_PROC: Response sent successfully (protocol 0x%02X, %d bytes)\n", 
            protocol, total_len);
     return 0;
+}
+
+void send_time_sync_response(Conn *c) {
+    time_t t = time(NULL);
+    struct tm *utc = gmtime(&t);   // get UTC time
+
+    unsigned char resp[15];
+    int idx = 0;
+
+    resp[idx++] = 0x78;
+    resp[idx++] = 0x78;
+    resp[idx++] = 0x07;        // packet length
+    resp[idx++] = 0x30;        // protocol number
+
+    resp[idx++] = int_to_bcd((utc->tm_year + 1900) % 100);  // year (2 digits)
+    resp[idx++] = int_to_bcd(utc->tm_mon + 1);              // month
+    resp[idx++] = int_to_bcd(utc->tm_mday);                 // day
+    resp[idx++] = int_to_bcd(utc->tm_hour);                 // hour
+    resp[idx++] = int_to_bcd(utc->tm_min);                  // minute
+    resp[idx++] = int_to_bcd(utc->tm_sec);                  // second
+
+    resp[idx++] = 0x0D;
+    resp[idx++] = 0x0A;
+
+    send(c->fd, resp, idx, 0);
+
+    printf(">> Sent time sync response (0x30): ");
+    for (int i = 0; i < idx; i++) {
+        printf("%02X ", resp[i]);
+    }
+    printf("\n");
+}
+
+// helper to convert int to BCD
+static unsigned char int_to_bcd(int val) {
+    return (unsigned char)(((val / 10) << 4) | (val % 10));
 }

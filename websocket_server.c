@@ -42,7 +42,6 @@ static int base64_encode(const unsigned char *input, size_t input_len,
                         char *output, size_t output_len);
 static void remove_websocket_connection(int fd);
 static void cleanup_websocket_connection(int fd);
-//static void extract_imei_from_handshake(int fd, const char *buffer);
 bool device_online_status(const char *imei);
 
 int websocket_server_init(void) {
@@ -681,45 +680,7 @@ static int make_socket_non_blocking(int fd) {
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
-/*static void extract_imei_from_handshake(int fd, const char *buffer) {
-    // Extract IMEI from query parameters
-    char *request_line = strstr(buffer, "GET ");
-    if (request_line) {
-        char *url_start = request_line + 4; // Skip "GET "
-        char *url_end = strstr(url_start, " HTTP/");
-        if (url_end) {
-            // Create a copy of the URL to avoid modifying the original buffer
-            size_t url_len = url_end - url_start;
-            char url_copy[2048]; // Match the handshake buffer size
-            if (url_len < sizeof(url_copy)) {
-                strncpy(url_copy, url_start, url_len);
-                url_copy[url_len] = '\0';
-                
-                // Look for imei parameter
-                char *imei_param = strstr(url_copy, "imei=");
-                if (imei_param) {
-                    imei_param += 5; // Skip "imei="
-                    char *imei_end = strchr(imei_param, '&');
-                    if (imei_end) {
-                        *imei_end = '\0';
-                    }   
-                    // Find the connection and store IMEI
-                    pthread_mutex_lock(&g_ws_connections_mutex);
-                    for (int i = 0; i < MAX_WS_CONNECTIONS; i++) {
-                        if (g_ws_connections[i].fd == fd) {
-                            strncpy(g_ws_connections[i].imei, imei_param, sizeof(g_ws_connections[i].imei) - 1);
-                            g_ws_connections[i].imei[sizeof(g_ws_connections[i].imei) - 1] = '\0';
-                            g_ws_connections[i].has_imei = 1;
-                            printf("WebSocket: IMEI %s registered for fd=%d\n", g_ws_connections[i].imei, fd);
-                            break;
-                        }
-                    }
-                    pthread_mutex_unlock(&g_ws_connections_mutex);
-                }
-            }
-        }
-    }
-}*/
+
 
 bool device_online_status(const char *imei) {
     if (!imei) return false;
