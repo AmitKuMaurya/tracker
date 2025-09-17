@@ -4,7 +4,7 @@
 #include <time.h>
 
 #define BUF_SIZE 4096
-#define TIMEOUT_SECONDS 60  // 1 minute timeout
+#define TIMEOUT_SECONDS 180  // 3 minutes timeout
 
 // Event type identifiers
 #define EVENT_TYPE_SOCKET 1
