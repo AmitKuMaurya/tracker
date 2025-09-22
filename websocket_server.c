@@ -13,7 +13,7 @@
 #include <pthread.h>
 #include <openssl/sha.h>
 #include <openssl/bio.h>
-#include <openssl/evp.h>
+#include <openssl/evp.h>    
 #include <openssl/buffer.h>
 #include "websocket_server.h"
 #include "login_map.h"
@@ -188,10 +188,14 @@ static void *websocket_server_thread(void *arg) {
                             printf("WebSocket: Handshake complete for fd=%d\n", fd);
                             // Check online status and send appropriate message
                         if (device_online_status(conn->imei)) {
-                             websocket_send_to_imei(conn->imei, "Device is online", strlen("Device is online"));
+                            char* device_status_msg = device_online_status_json(1);  // here 1 mean device is online
+                                websocket_send_to_imei(conn->imei, device_status_msg, strlen(device_status_msg));
+                                free(device_status_msg);
                             printf("WebSocket: IMEI %s is online\n", conn->imei);
                         } else {
-                             websocket_send_to_imei(conn->imei, "Device is offline", strlen("Device is offline"));
+                            char* device_status_msg = device_online_status_json(0);  // here 0 mean device is offline
+                             websocket_send_to_imei(conn->imei, device_status_msg, strlen(device_status_msg));
+                             free(device_status_msg);
                              printf("WebSocket: IMEI %s is offline\n", conn->imei);
                         }
                         } else {
@@ -407,10 +411,6 @@ static int contains_case_insensitive(const char *haystack, const char *needle) {
     return 0;
 }
  
-
-
-
-
 static int handle_websocket_frame(int fd) {
     char buf[WS_BUF_SIZE];
     ssize_t len = recv(fd, buf, sizeof(buf), 0);

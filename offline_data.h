@@ -50,7 +50,6 @@ typedef struct {
     double lat;                  /**< Resolved latitude (degrees) */
     double lon;                  /**< Resolved longitude (degrees) */
     double accuracy_m;           /**< Location accuracy in meters */
-    char address[256];           /**< Human-readable address (if available) */
     int is_resolved;             /**< Flag indicating if location was successfully resolved */
 } LocationData;
 

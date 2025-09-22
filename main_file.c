@@ -150,6 +150,10 @@ void cleanup_connection(int epfd, Conn *c) {
         return;
     }
     
+    // we will inform app to device status offline
+    char* device_status_msg = device_online_status_json(0);  // here 0 mean device is offline
+    websocket_send_to_imei(c->login_id, device_status_msg, strlen(device_status_msg));
+    free(device_status_msg);
     printf("CLEANUP: Cleaning up connection fd=%d\n", c->fd);
     
     // Remove from login map

@@ -211,7 +211,9 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
     int num_digits = digit_index;
     const char *last15 = (num_digits >= 15) ? (imei + (num_digits - 15)) : imei;
     snprintf(c->login_id, sizeof(c->login_id), "%.15s", last15);
-    websocket_send_to_imei(c->login_id, "Device is online", strlen("Device is online"));
+    char* device_status_msg = device_online_status_json(1);
+    websocket_send_to_imei(c->login_id, device_status_msg, strlen(device_status_msg));
+    free(device_status_msg);
     c->has_login_id = 1;
     
     printf("DATA_PROC: Device login - IMEI: %s, fd: %d\n", c->login_id, c->fd);

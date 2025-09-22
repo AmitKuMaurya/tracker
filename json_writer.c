@@ -79,9 +79,6 @@ cJSON* create_lbs_json_object(void *c, const void *data) {
             cJSON_AddNumberToObject(location, "lat", lbs_data->location->lat);
             cJSON_AddNumberToObject(location, "lon", lbs_data->location->lon);
             cJSON_AddNumberToObject(location, "accuracy_m", lbs_data->location->accuracy_m);
-            if (lbs_data->location->address[0] != '\0') {
-                cJSON_AddStringToObject(location, "address", lbs_data->location->address);
-            }
             cJSON_AddItemToObject(json, "location", location);
         }
     }
@@ -326,4 +323,20 @@ char* create_websocket_lbs_message(const char *imei, const LBSData *lbs_data) {
     cJSON_Delete(root);
     
     return json_string;
+}
+
+char* device_online_status_json(int is_online){
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        return NULL;
+    }
+
+    cJSON_AddStringToObject(root, "type", "device_status");
+    cJSON_AddNumberToObject(root, "status", status_number);
+    
+    char *json_string = cJSON_Print(root);
+    cJSON_Delete(root);
+
+    return json_string;
+
 }
