@@ -14,6 +14,7 @@
 #define DATA_PROCESSING_H
 
 #include "conn.h"
+#include <stdbool.h>
 
 /**
  * @brief Process input buffer and extract complete frames
@@ -73,5 +74,16 @@ void process_heartbeat_command(Conn *c, const unsigned char *cmd, int len);
  * @return 0 on success, -1 on error
  */
 int send_device_response(Conn *c, unsigned char protocol, const unsigned char *data, int data_len);
+
+/*
+ * @brief Set heartbeat interval for a connection
+ * 
+ * Configures the heartbeat interval for a specific connection.
+ * 
+ * @param c Connection structure
+ * @param heartbeat_interval Heartbeat interval in seconds
+ * @return true on success, false on failure
+ */
+bool set_heartbeat(Conn *c, int heartbeat_interval);
 
 #endif // DATA_PROCESSING_H

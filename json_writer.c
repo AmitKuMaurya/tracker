@@ -314,10 +314,7 @@ char* create_websocket_lbs_message(const char *imei, const LBSData *lbs_data) {
     cJSON_AddNumberToObject(root, "cell_count", lbs_data->unique_lbs_count);
     cJSON_AddNumberToObject(root, "wifi_count", lbs_data->unique_wifi_count);
     
-    // Add address if available
-    if (lbs_data->location->address[0] != '\0') {
-        cJSON_AddStringToObject(root, "address", lbs_data->location->address);
-    }
+    
     
     char *json_string = cJSON_Print(root);
     cJSON_Delete(root);
@@ -332,7 +329,7 @@ char* device_online_status_json(int is_online){
     }
 
     cJSON_AddStringToObject(root, "type", "device_status");
-    cJSON_AddNumberToObject(root, "status", status_number);
+    cJSON_AddNumberToObject(root, "status", is_online);
     
     char *json_string = cJSON_Print(root);
     cJSON_Delete(root);

@@ -49,7 +49,6 @@ int lbs_query_google(LBSData *data) {
     }
     
     data->location->is_resolved = 0;
-    data->location->address[0] = '\0';
 
     // Build JSON payload for Google API using json_writer
     char *json_payload = create_google_geolocation_payload(data);

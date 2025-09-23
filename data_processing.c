@@ -19,6 +19,7 @@
 #include "login_map.h"
 #include "offline_data.h"
 #include "websocket_server.h"
+#include "json_writer.h"
 /* Constants */
 #define FRAME_HEADER_SIZE 2
 #define FRAME_TERMINATOR_SIZE 2
@@ -211,11 +212,19 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
     int num_digits = digit_index;
     const char *last15 = (num_digits >= 15) ? (imei + (num_digits - 15)) : imei;
     snprintf(c->login_id, sizeof(c->login_id), "%.15s", last15);
+    // we will inform app to device status online
     char* device_status_msg = device_online_status_json(1);
     websocket_send_to_imei(c->login_id, device_status_msg, strlen(device_status_msg));
     free(device_status_msg);
     c->has_login_id = 1;
-    
+
+    // we set heartbeat interval 170 sec
+    if (set_heartbeat(c, 170)) {
+        printf("DATA_PROC: Heartbeat interval set to 170 seconds for fd=%d\n", c->fd);
+    } else {
+        printf("DATA_PROC: Failed to set heartbeat interval for fd=%d\n", c->fd);
+    }
+
     printf("DATA_PROC: Device login - IMEI: %s, fd: %d\n", c->login_id, c->fd);
     
     // Register device in login map
@@ -241,6 +250,8 @@ void process_heartbeat_command(Conn *c, const unsigned char *cmd, int len) {
     
     printf("DATA_PROC: Heartbeat from device %s (fd: %d)\n", 
            c->has_login_id ? c->login_id : "unknown", c->fd);
+
+    
     
     // Heartbeat packets typically don't require a response
     // But we could implement connection timeout management here
@@ -329,4 +340,22 @@ void send_time_sync_response(Conn *c) {
 // helper to convert int to BCD
 static unsigned char int_to_bcd(int val) {
     return (unsigned char)(((val / 10) << 4) | (val % 10));
+}
+
+bool set_heartbeat(Conn *c, int heartbeat_interval) {
+    if (!c) return false;
+
+    unsigned char high = (heartbeat_interval >> 8) & 0xFF;
+    unsigned char low  = heartbeat_interval & 0xFF;
+
+    unsigned char heartbeat_cmd[8] = {
+        0x78, 0x78,       // start
+        0x03,             // length (fixed for this cmd)
+        0x13,             // protocol number
+        high, low,        // interval
+        0x0D, 0x0A        // end
+    };
+
+    send_device_response(c, 0x13, heartbeat_cmd, sizeof(heartbeat_cmd));
+    return true;
 }

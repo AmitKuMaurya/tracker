@@ -7,6 +7,18 @@
 #include "login_map.h"
 #include <unistd.h>
 #include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <strings.h> // for strncasecmp, strcasestr
+#include <ctype.h> // for tolower
+#include <arpa/inet.h>
+#include <sys/epoll.h>
+#include <sys/socket.h>
+#include <netinet/in.h> 
+#include <openssl/buffer.h>
+#include "json_writer.h"
 #define WS_PORT 8082
 #define WS_MAX_EVENTS 1000
 #define WS_BUF_SIZE 4096

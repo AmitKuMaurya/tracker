@@ -459,9 +459,6 @@ void lbs_command(Conn *c, const unsigned char *cmd, int len) {
     if (lbs_query_google(&data) == 0 && data.location && data.location->is_resolved) {
         printf("%s LBS resolved lat/lon: %.6f, %.6f, accuracy: %.1fm\n", 
                LOG_PREFIX, data.location->lat, data.location->lon, data.location->accuracy_m);
-        if (data.location->address[0] != '\0') {
-            printf("%s Address: %s\n", LOG_PREFIX, data.location->address);
-        }
         
         // Send location data to WebSocket clients with matching IMEI
         if (c && c->has_login_id) {
