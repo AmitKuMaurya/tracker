@@ -1,22 +1,6 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <strings.h> // for strncasecmp, strcasestr
-#include <ctype.h> // for tolower
-#include <arpa/inet.h>
-#include <sys/epoll.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <pthread.h>
-#include <openssl/sha.h>
-#include <openssl/bio.h>
-#include <openssl/evp.h>    
-#include <openssl/buffer.h>
+
 #include "websocket_server.h"
-#include "login_map.h"
+
 
 static WSServer g_ws_server = {0};
 
@@ -194,9 +178,10 @@ static void *websocket_server_thread(void *arg) {
                             printf("WebSocket: IMEI %s is online\n", conn->imei);
                         } else {
                             char* device_status_msg = device_online_status_json(0);  // here 0 mean device is offline
-                             websocket_send_to_imei(conn->imei, device_status_msg, strlen(device_status_msg));
-                             free(device_status_msg);
-                             printf("WebSocket: IMEI %s is offline\n", conn->imei);
+                            websocket_send_to_imei(conn->imei,"device is offline", strlen("device is offline"));
+                            websocket_send_to_imei(conn->imei, device_status_msg, strlen(device_status_msg));
+                            free(device_status_msg);
+                            printf("WebSocket: IMEI %s is offline\n", conn->imei);
                         }
                         } else {
                             printf("WebSocket: Handshake failed for fd=%d\n", fd);
