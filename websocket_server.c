@@ -180,6 +180,7 @@ static void *websocket_server_thread(void *arg) {
                             char* device_status_msg = device_online_status_json(0);  // here 0 mean device is offline
                             websocket_send_to_imei(conn->imei,"device is offline", strlen("device is offline"));
                             websocket_send_to_imei(conn->imei, device_status_msg, strlen(device_status_msg));
+                            printf("device status online payload: %s\n",device_status_msg);
                             free(device_status_msg);
                             printf("WebSocket: IMEI %s is offline\n", conn->imei);
                         }
