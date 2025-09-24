@@ -466,11 +466,27 @@ int websocket_send_to_imei(const char *imei, const char *data, size_t len) {
             int frame_len = create_websocket_frame(frame, sizeof(frame), data, len, WS_OP_TEXT);
             
             if (frame_len > 0) {
-                ssize_t sent = send(g_ws_connections[i].fd, frame, frame_len, 0);
-                if (sent == frame_len) {
+                size_t total_sent = 0;
+                while (total_sent < (size_t)frame_len) {
+                    ssize_t sent = send(g_ws_connections[i].fd, frame + total_sent, frame_len - total_sent, 0);
+                    if (sent > 0) {
+                        total_sent += (size_t)sent;
+                        continue;
+                    }
+                    if (sent == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                        // Socket not currently writable; brief sleep and retry
+                        usleep(1000);
+                        continue;
+                    }
+                    // Hard error
+                    printf("WebSocket: send error to fd=%d: %s\n", g_ws_connections[i].fd, strerror(errno));
+                    break;
+                }
+                if (total_sent == (size_t)frame_len) {
                     count++;
                 } else {
-                    printf("WebSocket: Failed to send data to fd=%d\n", g_ws_connections[i].fd);
+                    printf("WebSocket: Failed to send complete frame to fd=%d (%zu/%d bytes)\n", 
+                           g_ws_connections[i].fd, total_sent, frame_len);
                 }
             }
         }
@@ -495,8 +511,20 @@ int websocket_broadcast(const char *data, size_t len) {
             int frame_len = create_websocket_frame(frame, sizeof(frame), data, len, WS_OP_TEXT);
             
             if (frame_len > 0) {
-                ssize_t sent = send(g_ws_connections[i].fd, frame, frame_len, 0);
-                if (sent == frame_len) {
+                size_t total_sent = 0;
+                while (total_sent < (size_t)frame_len) {
+                    ssize_t sent = send(g_ws_connections[i].fd, frame + total_sent, frame_len - total_sent, 0);
+                    if (sent > 0) {
+                        total_sent += (size_t)sent;
+                        continue;
+                    }
+                    if (sent == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                        usleep(1000);
+                        continue;
+                    }
+                    break;
+                }
+                if (total_sent == (size_t)frame_len) {
                     count++;
                 }
             }

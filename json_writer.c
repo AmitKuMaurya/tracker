@@ -333,7 +333,6 @@ char* device_online_status_json(int is_online){
     
     char *json_string = cJSON_Print(root);
     cJSON_Delete(root);
-
     return json_string;
 
 }
