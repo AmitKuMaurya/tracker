@@ -171,6 +171,8 @@ static void *websocket_server_thread(void *arg) {
                             conn->state = WS_STATE_OPEN;
                             printf("WebSocket: Handshake complete for fd=%d\n", fd);
                             // Check online status and send appropriate message
+                        // Give clients a brief moment to attach onmessage handlers
+                        usleep(50000);
                         if (device_online_status(conn->imei)) {
                             char* device_status_msg = device_online_status_json(1);  // here 1 mean device is online
                                 websocket_send_to_imei(conn->imei, device_status_msg, strlen(device_status_msg));
@@ -464,6 +466,9 @@ int websocket_send_to_imei(const char *imei, const char *data, size_t len) {
             
             char frame[WS_BUF_SIZE];
             int frame_len = create_websocket_frame(frame, sizeof(frame), data, len, WS_OP_TEXT);
+            if (frame_len <= 0) {
+                printf("WebSocket: Failed to create frame for IMEI=%s, len=%zu\n", imei, len);
+            }
             
             if (frame_len > 0) {
                 size_t total_sent = 0;
@@ -483,6 +488,7 @@ int websocket_send_to_imei(const char *imei, const char *data, size_t len) {
                     break;
                 }
                 if (total_sent == (size_t)frame_len) {
+                    printf("WebSocket: Sent frame to fd=%d, bytes=%d (IMEI=%s)\n", g_ws_connections[i].fd, frame_len, imei);
                     count++;
                 } else {
                     printf("WebSocket: Failed to send complete frame to fd=%d (%zu/%d bytes)\n", 
@@ -509,6 +515,9 @@ int websocket_broadcast(const char *data, size_t len) {
         if (g_ws_connections[i].fd != -1 && g_ws_connections[i].state == WS_STATE_OPEN) {
             char frame[WS_BUF_SIZE];
             int frame_len = create_websocket_frame(frame, sizeof(frame), data, len, WS_OP_TEXT);
+            if (frame_len <= 0) {
+                printf("WebSocket: Failed to create frame for broadcast, len=%zu\n", len);
+            }
             
             if (frame_len > 0) {
                 size_t total_sent = 0;
@@ -525,6 +534,7 @@ int websocket_broadcast(const char *data, size_t len) {
                     break;
                 }
                 if (total_sent == (size_t)frame_len) {
+                    printf("WebSocket: Broadcast sent to fd=%d, bytes=%d\n", g_ws_connections[i].fd, frame_len);
                     count++;
                 }
             }
