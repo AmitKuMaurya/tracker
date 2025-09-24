@@ -120,6 +120,10 @@ void handle_connection_timeout(int epfd, Conn *c) {
     
     printf("TIMER: Connection timeout - closing fd=%d (login_id: %s)\n", 
            c->fd, c->has_login_id ? c->login_id : "unknown");
+
+    char* device_status_msg = device_online_status_json(0);  // here 0 mean device is offline
+    websocket_send_to_imei(c->login_id, device_status_msg, strlen(device_status_msg));
+    free(device_status_msg);
     
     // Remove from login map
     login_map_remove_for_conn(c);
@@ -151,9 +155,7 @@ void cleanup_connection(int epfd, Conn *c) {
     }
     
     // we will inform app to device status offline
-    char* device_status_msg = device_online_status_json(0);  // here 0 mean device is offline
-    websocket_send_to_imei(c->login_id, device_status_msg, strlen(device_status_msg));
-    free(device_status_msg);
+    
     printf("CLEANUP: Cleaning up connection fd=%d\n", c->fd);
     
     // Remove from login map
