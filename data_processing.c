@@ -337,7 +337,7 @@ void send_time_sync_response(Conn *c) {
     printf("\n");
 }
 
-// helper to convert int to BCD
+// helper to convert int to BCD 
 static unsigned char int_to_bcd(int val) {
     return (unsigned char)(((val / 10) << 4) | (val % 10));
 }
