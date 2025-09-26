@@ -61,19 +61,6 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len);
  */
 void process_heartbeat_command(Conn *c, const unsigned char *cmd, int len);
 
-/**
- * @brief Send response to device
- * 
- * Sends a properly formatted response back to the GPS device
- * according to the protocol requirements.
- * 
- * @param c Connection structure
- * @param protocol Protocol number for the response
- * @param data Response data (optional)
- * @param data_len Length of response data
- * @return 0 on success, -1 on error
- */
-int send_device_response(Conn *c, unsigned char protocol, const unsigned char *data, int data_len);
 
 /*
  * @brief Set heartbeat interval for a connection
@@ -85,5 +72,10 @@ int send_device_response(Conn *c, unsigned char protocol, const unsigned char *d
  * @return true on success, false on failure
  */
 bool set_heartbeat(Conn *c, int heartbeat_interval);
+
+/**
+ @brief Process device details command (protocol 0x13)
+ */
+void process_device_details_command(Conn *c, const unsigned char *cmd, int len);
 
 #endif // DATA_PROCESSING_H

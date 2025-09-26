@@ -345,7 +345,15 @@ static int handle_websocket_handshake(int fd) {
 
     // Create Sec-WebSocket-Accept
     char combined_key[256];
-    snprintf(combined_key, sizeof(combined_key), "%s%s", client_key, WS_MAGIC_STRING);
+    size_t ck_len = strlen(client_key);
+    size_t magic_len = strlen(WS_MAGIC_STRING);
+    if (ck_len + magic_len >= sizeof(combined_key)) {
+        printf("WebSocket: Sec-WebSocket-Key too long\n");
+        return -1;
+    }
+    memcpy(combined_key, client_key, ck_len);
+    memcpy(combined_key + ck_len, WS_MAGIC_STRING, magic_len);
+    combined_key[ck_len + magic_len] = '\0';
     unsigned char sha1_hash[SHA_DIGEST_LENGTH];
     SHA1((unsigned char *)combined_key, strlen(combined_key), sha1_hash);
     char accept_key[256];

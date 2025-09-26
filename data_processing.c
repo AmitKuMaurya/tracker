@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <time.h>
 #include "data_processing.h"
 #include "gps_data.h"
 #include "login_map.h"
@@ -140,6 +141,10 @@ void dispatch_command(Conn *c, const char *cmd, int len) {
                    (protocol == 0x10) ? "online" : "offline");
             process_gps_command(c, (const unsigned char *)cmd, len);
             break;
+        case 0x13:
+            printf("DATA_PROC: device details command received\n");
+            process_device_details_command(c, (const unsigned char *)cmd, len);
+            break;
             
         case 0x17:
         case 0x18:
@@ -218,9 +223,9 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
     free(device_status_msg);
     c->has_login_id = 1;
 
-    // we set heartbeat interval 170 sec
-    if (set_heartbeat(c, 170)) {
-        printf("DATA_PROC: Heartbeat interval set to 170 seconds for fd=%d\n", c->fd);
+    // we set heartbeat interval 30 sec
+    if (set_heartbeat(c, 30)) {
+        printf("DATA_PROC: Heartbeat interval set to 30 seconds for fd=%d\n", c->fd);
     } else {
         printf("DATA_PROC: Failed to set heartbeat interval for fd=%d\n", c->fd);
     }
@@ -257,53 +262,6 @@ void process_heartbeat_command(Conn *c, const unsigned char *cmd, int len) {
     // But we could implement connection timeout management here
     
     (void)len; // Suppress unused parameter warning
-}
-
-/**
- * @brief Send response to device
- */
-int send_device_response(Conn *c, unsigned char protocol, const unsigned char *data, int data_len) {
-    if (!c) {
-        printf("DATA_PROC: Invalid connection for response\n");
-        return -1;
-    }
-    
-    // Calculate total response length
-    int total_len = FRAME_HEADER_SIZE + 1 + 1 + data_len + FRAME_TERMINATOR_SIZE;
-    unsigned char *response = malloc(total_len);
-    if (!response) {
-        printf("DATA_PROC: Failed to allocate memory for response\n");
-        return -1;
-    }
-    
-    // Build response frame
-    int pos = 0;
-    response[pos++] = 0x78; // Header
-    response[pos++] = 0x78; // Header
-    response[pos++] = data_len; // Data length
-    response[pos++] = protocol; // Protocol
-    
-    // Add data if present
-    if (data && data_len > 0) {
-        memcpy(response + pos, data, data_len);
-        pos += data_len;
-    }
-    
-    response[pos++] = 0x0D; // Terminator
-    response[pos++] = 0x0A; // Terminator
-    
-    // Send response
-    ssize_t bytes_sent = send(c->fd, response, total_len, 0);
-    free(response);
-    
-    if (bytes_sent != total_len) {
-        printf("DATA_PROC: Response send failed: %zd/%d bytes\n", bytes_sent, total_len);
-        return -1;
-    }
-    
-    printf("DATA_PROC: Response sent successfully (protocol 0x%02X, %d bytes)\n", 
-           protocol, total_len);
-    return 0;
 }
 
 void send_time_sync_response(Conn *c) {
@@ -352,10 +310,35 @@ bool set_heartbeat(Conn *c, int heartbeat_interval) {
         0x78, 0x78,       // start
         0x03,             // length (fixed for this cmd)
         0x13,             // protocol number
-        high, low,        // interval
+        high, low,        // interval time
         0x0D, 0x0A        // end
     };
 
-    send_device_response(c, 0x13, heartbeat_cmd, sizeof(heartbeat_cmd));
+    send(c->fd, heartbeat_cmd, sizeof(heartbeat_cmd), 0);
     return true;
 }
+
+void process_device_details_command(Conn *c, const unsigned char *cmd, int len) {
+    (void)c;
+    (void)len;
+    // Direct byte extraction - ALREADY GIVES DECIMAL VALUES
+    unsigned char battery_level = cmd[4];
+    unsigned char firmware_version = cmd[5];
+    unsigned char time_zone = cmd[6];
+    unsigned char status_upload_interval = cmd[7];
+    unsigned char signal_strength = cmd[8];
+    
+    // Print decimal values (what you want)
+    printf("[DATAPROC] Device Status (Decimal Values):\n");
+    printf("  - Battery Level: %d%%\n", battery_level);           // Will print: 75%
+    printf("  - Firmware Version: %d\n", firmware_version);      // Will print: 42
+    printf("  - Time Zone: GMT+%d\n", time_zone);               // Will print: GMT+5
+    printf("  - Upload Interval: %d minutes\n", status_upload_interval); // Will print: 10 minutes
+    printf("  - Signal Strength: %d%%\n", signal_strength);     // Will print: 64%
+    
+    // If you want to see hex representation (for debugging)
+    printf("[DEBUG] Hex representation:\n");
+    printf("  - Battery: 0x%02X\n", battery_level);             // Will print: 0x4B
+    printf("  - Firmware: 0x%02X\n", firmware_version);         // Will print: 0x2A
+}
+
