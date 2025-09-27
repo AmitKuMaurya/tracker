@@ -33,6 +33,7 @@ static unsigned char int_to_bcd(int val);
 void send_time_sync_response(Conn *c);
 const char* timezone_int_to_str(int tz);
 bool set_status_upload_interval(Conn *c, int interval_minutes);
+bool set_location_upload_interval(Conn *c, int interval_seconds);
 /**
  * @brief Process input buffer and extract complete frames
  */
@@ -225,12 +226,20 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
     free(device_status_msg);
     c->has_login_id = 1;
 
-    // we set status upload interval to 1 minute (or your desired value)
-    int status_upload_interval = 1; // set to 1 minute, change as needed
+    // we set status upload interval to 2 minutes (or your desired value)
+    int status_upload_interval = 2; // set to 2 minutes, change as needed
     if(set_status_upload_interval(c, status_upload_interval)) {
         printf("DATA_PROC: Status upload interval set to %d minutes for fd=%d\n", status_upload_interval, c->fd);
     } else {
         printf("DATA_PROC: Failed to set status upload interval for fd=%d\n", c->fd);
+    }
+
+    // we set location upload interval to 10 seconds (or your desired value)
+    int location_upload_interval = 10; // set to 10 seconds, change as needed
+    if(set_location_upload_interval(c, location_upload_interval)){
+        printf("DATA_PROC: Location upload interval set to %d seconds for fd=%d\n", location_upload_interval, c->fd);
+    } else {
+        printf("DATA_PROC: Failed to set location upload interval for fd=%d\n", c->fd);
     }
 
     printf("DATA_PROC: Device login - IMEI: %s, fd: %d\n", c->login_id, c->fd);
@@ -391,6 +400,28 @@ bool set_status_upload_interval(Conn *c, int interval_minutes) {
         printf("DATA_PROC: Failed to send status upload interval command\n");
     }
 
+    return result;
+}
+
+bool set_location_upload_interval(Conn *c, int interval_seconds) {
+    if (!c) return false;
+    if (interval_seconds < 0 || interval_seconds > 255) return false; // valid range
+
+    int high = (interval_seconds >> 8) & 0x0F; // high nibble
+    int low  = interval_seconds & 0x0F;        // low nibble
+    unsigned char location_cmd[8] = {
+        0x78, 0x78,       // start
+        0x03,             // length (fixed for this cmd)
+        0x97,             // protocol number (status interval)
+        high, low,       // interval time in seconds
+        0x0D, 0x0A        // end
+    };
+    int result = send(c->fd, location_cmd, sizeof(location_cmd), 0) == sizeof(location_cmd);
+    if(result) {
+        printf("DATA_PROC: Location upload interval command sent successfully\n");
+    } else {
+        printf("DATA_PROC: Failed to send location upload interval command\n");
+    }
     return result;
 }
  
