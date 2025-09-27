@@ -85,5 +85,8 @@ bool set_heartbeat(Conn *c, int heartbeat_interval);
  */
  void process_device_details_command(Conn *c, const unsigned char *cmd, int len);
 
+ bool set_status_upload_interval(Conn *c, int interval_minutes);
+
+
 
 #endif // DATA_PROCESSING_H

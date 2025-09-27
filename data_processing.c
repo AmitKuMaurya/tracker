@@ -32,6 +32,7 @@ static void log_frame_data(const char *frame, int len);
 static unsigned char int_to_bcd(int val);
 void send_time_sync_response(Conn *c);
 const char* timezone_int_to_str(int tz);
+bool set_status_upload_interval(Conn *c, int interval_minutes);
 /**
  * @brief Process input buffer and extract complete frames
  */
@@ -224,11 +225,12 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
     free(device_status_msg);
     c->has_login_id = 1;
 
-    // we set heartbeat interval 30 sec
-    if (set_heartbeat(c, 30)) {
-        printf("DATA_PROC: Heartbeat interval set to 30 seconds for fd=%d\n", c->fd);
+    // we set status upload interval to 1 minute (or your desired value)
+    int status_upload_interval = 1; // set to 1 minute, change as needed
+    if(set_status_upload_interval(c, status_upload_interval)) {
+        printf("DATA_PROC: Status upload interval set to %d minutes for fd=%d\n", status_upload_interval, c->fd);
     } else {
-        printf("DATA_PROC: Failed to set heartbeat interval for fd=%d\n", c->fd);
+        printf("DATA_PROC: Failed to set status upload interval for fd=%d\n", c->fd);
     }
 
     printf("DATA_PROC: Device login - IMEI: %s, fd: %d\n", c->login_id, c->fd);
@@ -341,43 +343,57 @@ void process_device_details_command(Conn *c, const unsigned char *cmd, int len) 
     printf("  - Upload Interval: %d minutes\n", status_upload_interval); // Will print: 10 minutes
     printf("  - Signal Strength: %d%%\n", signal_strength);     // Will print: 64%
     
-    // If you want to see hex representation (for debugging)
-    printf("[DEBUG] Hex representation:\n");
-    printf("  - Battery: 0x%02X\n", battery_level);             // Will print: 0x4B
-    printf("  - Firmware: 0x%02X\n", firmware_version);         // Will print: 0x2A
 
     if(send(c->fd, cmd, len, 0)==len){
         printf("DATA_PROC: Echoed back command to device successfully\n");
     } else {
         printf("DATA_PROC: Failed to echo back command to device\n");
     }
+
+    
 }
 
 const char* timezone_int_to_str(int tz) {
-    static char result[16];  
-    
-    int upper_nibble = (tz >> 4) & 0x0F;
-    int lower_nibble = tz & 0x0F;
-    
-    // Lookup table for minutes
-    int minutes_table[] = {0, 0, 15, 15, 30, 30, 45, 45};
-    char sign_table[] = {'+', '-', '+', '-', '+', '-', '+', '-'};
-    
-    if (upper_nibble > 7) {
-        strcpy(result, "INVALID");
-        return result;
-    }
-    
-    int minutes = minutes_table[upper_nibble];
-    char sign = sign_table[upper_nibble];
-    
-    if (minutes == 0) {
-        snprintf(result, sizeof(result), "GMT%c%d", sign, lower_nibble);
-    } else {
-        snprintf(result, sizeof(result), "GMT%c%d:%02d", sign, lower_nibble, minutes);
-    }
-    
+    static char result[16];
+
+    int hours = tz & 0x0F;           // low nibble
+    int high  = (tz >> 4) & 0x0F;    // high nibble
+
+    int sign = (high % 2 == 0) ? 1 : -1;   // even = positive, odd = negative
+    int minutes = (high / 2) * 15;         // 0, 15, 30, 45
+
+    if (minutes == 0)
+        snprintf(result, sizeof(result), "GMT%c%d",
+                 (sign == 1 ? '+' : '-'), hours);
+    else
+        snprintf(result, sizeof(result), "GMT%c%d:%02d",
+                 (sign == 1 ? '+' : '-'), hours, minutes);
+
     return result;
 }
+
+bool set_status_upload_interval(Conn *c, int interval_minutes) {
+    if (!c) return false;
+    if (interval_minutes < 0 || interval_minutes > 255) return false; // valid range
+
+    unsigned char status_cmd[7] = {
+        0x78, 0x78,       // start
+        0x02,             // length (fixed for this cmd)
+        0x13,             // protocol number (status interval)
+        (unsigned char)interval_minutes, // interval time in minutes
+        0x0D, 0x0A        // end
+    };
+
+    int result = send(c->fd, status_cmd, sizeof(status_cmd), 0) == sizeof(status_cmd);
+    if(result) {
+        printf("DATA_PROC: Status upload interval command sent successfully\n");
+    } else {
+        printf("DATA_PROC: Failed to send status upload interval command\n");
+    }
+
+    return result;
+}
+ 
+
 
 
