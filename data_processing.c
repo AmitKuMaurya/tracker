@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <time.h>
 #include "data_processing.h"
 #include "gps_data.h"
 #include "login_map.h"
@@ -30,6 +31,7 @@ static int extract_frame(Conn *c, int start_pos, int *frame_len);
 static void log_frame_data(const char *frame, int len);
 static unsigned char int_to_bcd(int val);
 void send_time_sync_response(Conn *c);
+const char* timezone_int_to_str(int tz);
 /**
  * @brief Process input buffer and extract complete frames
  */
@@ -140,9 +142,8 @@ void dispatch_command(Conn *c, const char *cmd, int len) {
                    (protocol == 0x10) ? "online" : "offline");
             process_gps_command(c, (const unsigned char *)cmd, len);
             break;
-
         case 0x13:
-            printf("DATA_PROC: Device status other details command received\n");
+            printf("DATA_PROC: device details command received\n");
             process_device_details_command(c, (const unsigned char *)cmd, len);
             break;
             
@@ -223,6 +224,13 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
     free(device_status_msg);
     c->has_login_id = 1;
 
+    // we set heartbeat interval 30 sec
+    if (set_heartbeat(c, 30)) {
+        printf("DATA_PROC: Heartbeat interval set to 30 seconds for fd=%d\n", c->fd);
+    } else {
+        printf("DATA_PROC: Failed to set heartbeat interval for fd=%d\n", c->fd);
+    }
+
     printf("DATA_PROC: Device login - IMEI: %s, fd: %d\n", c->login_id, c->fd);
     
     // Register device in login map
@@ -257,8 +265,6 @@ void process_heartbeat_command(Conn *c, const unsigned char *cmd, int len) {
     (void)len; // Suppress unused parameter warning
 }
 
-
-
 void send_time_sync_response(Conn *c) {
     time_t t = time(NULL);
     struct tm *utc = gmtime(&t);   // get UTC time
@@ -290,7 +296,7 @@ void send_time_sync_response(Conn *c) {
     printf("\n");
 }
 
-// helper to convert int to BCD
+// helper to convert int to BCD 
 static unsigned char int_to_bcd(int val) {
     return (unsigned char)(((val / 10) << 4) | (val % 10));
 }
@@ -305,35 +311,73 @@ bool set_heartbeat(Conn *c, int heartbeat_interval) {
         0x78, 0x78,       // start
         0x03,             // length (fixed for this cmd)
         0x13,             // protocol number
-        high, low,        // interval
+        high, low,        // interval time
         0x0D, 0x0A        // end
     };
 
-    send(c->fd, heartbeat_cmd, sizeof(heartbeat_cmd), 0);
+    if(send(c->fd, heartbeat_cmd, sizeof(heartbeat_cmd), 0) == sizeof(heartbeat_cmd)) {
+        printf("DATA_PROC: Heartbeat command set action sent successfully\n");
+    } else {
+        printf("DATA_PROC: Failed to send heartbeat command\n");
+    }
     return true;
 }
 
-/**
- * @brief Process device details command (protocol 0x13)
- */
- void process_device_details_command(Conn *c, const unsigned char *cmd, int len) {
+void process_device_details_command(Conn *c, const unsigned char *cmd, int len) {
+    (void)c;
+    (void)len;
     // Direct byte extraction - ALREADY GIVES DECIMAL VALUES
     unsigned char battery_level = cmd[4];
     unsigned char firmware_version = cmd[5];
-    unsigned char time_zone = cmd[6];
+    const char* time_zone = timezone_int_to_str(cmd[6]);
     unsigned char status_upload_interval = cmd[7];
     unsigned char signal_strength = cmd[8];
     
     // Print decimal values (what you want)
+    printf("[DATAPROC] Device Status (Decimal Values):\n");
     printf("  - Battery Level: %d%%\n", battery_level);           // Will print: 75%
     printf("  - Firmware Version: %d\n", firmware_version);      // Will print: 42
-    printf("  - Time Zone: GMT+%d\n", time_zone);               // Will print: GMT+5
+    printf("  - Time Zone: %s\n", time_zone);               // Will print: GMT+5
     printf("  - Upload Interval: %d minutes\n", status_upload_interval); // Will print: 10 minutes
     printf("  - Signal Strength: %d%%\n", signal_strength);     // Will print: 64%
     
-    if(send(c->fd, cmd, len, 0) != len) {
-        printf("DATA_PROC: Warning - Failed to send device details response\n");
-    }else{
-        printf("DATA_PROC: Device details response sent successfully\n");
+    // If you want to see hex representation (for debugging)
+    printf("[DEBUG] Hex representation:\n");
+    printf("  - Battery: 0x%02X\n", battery_level);             // Will print: 0x4B
+    printf("  - Firmware: 0x%02X\n", firmware_version);         // Will print: 0x2A
+
+    if(send(c->fd, cmd, len, 0)==len){
+        printf("DATA_PROC: Echoed back command to device successfully\n");
+    } else {
+        printf("DATA_PROC: Failed to echo back command to device\n");
     }
 }
+
+const char* timezone_int_to_str(int tz) {
+    static char result[16];  
+    
+    int upper_nibble = (tz >> 4) & 0x0F;
+    int lower_nibble = tz & 0x0F;
+    
+    // Lookup table for minutes
+    int minutes_table[] = {0, 0, 15, 15, 30, 30, 45, 45};
+    char sign_table[] = {'+', '-', '+', '-', '+', '-', '+', '-'};
+    
+    if (upper_nibble > 7) {
+        strcpy(result, "INVALID");
+        return result;
+    }
+    
+    int minutes = minutes_table[upper_nibble];
+    char sign = sign_table[upper_nibble];
+    
+    if (minutes == 0) {
+        snprintf(result, sizeof(result), "GMT%c%d", sign, lower_nibble);
+    } else {
+        snprintf(result, sizeof(result), "GMT%c%d:%02d", sign, lower_nibble, minutes);
+    }
+    
+    return result;
+}
+
+
