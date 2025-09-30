@@ -337,3 +337,19 @@ char* device_online_status_json(int is_online){
     return json_string;
 
 }
+
+char* device_details_json(int battery,int upload_interval,int signal_strength){
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        return NULL;
+    }
+    cJSON_AddNumberToObject(root, "battery", battery);
+    cJSON_AddNumberToObject(root, "upload_interval", upload_interval);
+    cJSON_AddNumberToObject(root, "signal_strength", signal_strength);
+    
+    char *json_string = cJSON_Print(root);
+    cJSON_Delete(root);
+
+    return json_string;
+
+}

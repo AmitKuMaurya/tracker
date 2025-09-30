@@ -76,4 +76,6 @@ char* create_websocket_gps_message(const char *imei, const GPSData *gps_data);
  */
 char* device_online_status_json(int is_online);
 
+char* device_details_json(int battery,int upload_interval,int signal_strength);
+
 #endif // JSON_WRITER_H
