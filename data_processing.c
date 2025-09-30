@@ -337,15 +337,15 @@ void process_device_details_command(Conn *c, const unsigned char *cmd, int len) 
     (void)c;
     (void)len;
     // Direct byte extraction - ALREADY GIVES DECIMAL VALUES
-    unsigned char battery_level = cmd[4];
+    int battery_level = cmd[4];
     //unsigned char firmware_version = cmd[5];
-    const char* time_zone = timezone_int_to_str(cmd[6]);
+    //const char* time_zone = timezone_int_to_str(cmd[6]);
     unsigned char status_upload_interval = cmd[7];
     unsigned char signal_strength = cmd[8];
     
     // Print decimal values (what you want)
     printf("[DATAPROC] Device Status (Decimal Values):\n");
-    printf("  - Battery Level: %d%%\n", battery_level);           // Will print: 75%
+    printf("  - Battery Level: %d\n", battery_level);           // Will print: 75%
     //printf("  - Firmware Version: %d\n", firmware_version);      // Will print: 42
     //printf("  - Time Zone: %s\n", time_zone);               // Will print: GMT+5
     printf("  - Upload Interval: %d minutes\n", status_upload_interval); // Will print: 10 minutes
