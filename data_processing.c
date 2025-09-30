@@ -234,8 +234,7 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
         printf("DATA_PROC: Failed to set status upload interval for fd=%d\n", c->fd);
     }
 
-    // we set location upload interval to 10 seconds (or your desired value)
-    int location_upload_interval = 10; // set to 10 seconds, change as needed
+    int location_upload_interval = 30; // set to 30 seconds, change as needed
     if(set_location_upload_interval(c, location_upload_interval)){
         printf("DATA_PROC: Location upload interval set to %d seconds for fd=%d\n", location_upload_interval, c->fd);
     } else {
@@ -365,11 +364,12 @@ void process_device_details_command(Conn *c, const unsigned char *cmd, int len) 
 const char* timezone_int_to_str(int tz) {
     static char result[16];
 
-    int hours = tz & 0x0F;           // low nibble
-    int high  = (tz >> 4) & 0x0F;    // high nibble
+    int hours = tz & 0x0F;             // low nibble = hours
+    int high  = (tz >> 4) & 0x0F;      // high nibble
 
-    int sign = (high % 2 == 0) ? 1 : -1;   // even = positive, odd = negative
-    int minutes = (high / 2) * 15;         // 0, 15, 30, 45
+    int quarter = (high >> 1) & 0x07;  // quarter-hour steps (0–7)
+    int minutes = quarter * 15;        // 0,15,30,45,...
+    int sign    = (high & 1) ? -1 : 1; // LSB = sign
 
     if (minutes == 0)
         snprintf(result, sizeof(result), "GMT%c%d",
@@ -380,6 +380,7 @@ const char* timezone_int_to_str(int tz) {
 
     return result;
 }
+
 
 bool set_status_upload_interval(Conn *c, int interval_minutes) {
     if (!c) return false;
