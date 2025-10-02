@@ -38,8 +38,8 @@ void process_gps_command(Conn *c, const unsigned char *cmd, int len) {
         return;
     }
     
-    // Validate packet
-    if (validate_gps_packet(cmd, len) != 0) {
+    if (len < GPS_MIN_PACKET_LENGTH) {
+        printf("%s: Invalid GPS packet length: %d\n", GPS_LOG_PREFIX, len);
         return;
     }
     
@@ -59,10 +59,10 @@ void process_gps_command(Conn *c, const unsigned char *cmd, int len) {
     unsigned char gps_info = cmd[10];
     gps_data.gps_data_length = (gps_info >> 4) & 0x0F;
     gps_data.satellite_count = gps_info & 0x0F;
-    
+
     // Check positioning status from status bytes
     gps_data.is_positioned = is_gps_positioned(cmd + 20);
-    
+
     if (!gps_data.is_positioned) {
         printf("%s: GPS not positioned, skipping coordinate processing\n", GPS_LOG_PREFIX);
         
@@ -189,32 +189,6 @@ int parse_gps_status(const unsigned char *cmd, GPSData *gps_data) {
     return 0;
 }
 
-int validate_gps_packet(const unsigned char *cmd, int len) {
-    if (!cmd) {
-        printf("%s: NULL command buffer\n", GPS_LOG_PREFIX);
-        return -1;
-    }
-    
-    if (len < GPS_MIN_PACKET_LENGTH) {
-        printf("%s: GPS packet too short: %d bytes (minimum: %d)\n", 
-               GPS_LOG_PREFIX, len, GPS_MIN_PACKET_LENGTH);
-        return -1;
-    }
-    
-    // Validate header
-    if (cmd[0] != 0x78 || cmd[1] != 0x78) {
-        printf("%s: Invalid GPS packet header\n", GPS_LOG_PREFIX);
-        return -1;
-    }
-    
-    // Validate terminator
-    if (cmd[len-2] != 0x0D || cmd[len-1] != 0x0A) {
-        printf("%s: Invalid GPS packet terminator\n", GPS_LOG_PREFIX);
-        return -1;
-    }
-    
-    return 0;
-}
 
 int send_gps_response(Conn *c, unsigned char protocol, const GPSData *gps_data) {
     if (!c || !gps_data) {
@@ -276,7 +250,7 @@ static int is_gps_positioned(const unsigned char *status_bytes) {
     
     // Check bit 4 of first status byte (GPS positioning status)
     // 0 = GPS not positioned, 1 = GPS positioned
-    return (status_bytes[0] & 0x08) != 0;
+    return (status_bytes[0] & 0x10) != 0;
 }
 
 static void convert_coordinates_to_degrees(uint32_t raw_lat, uint32_t raw_lon, 

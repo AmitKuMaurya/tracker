@@ -234,7 +234,7 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
         printf("DATA_PROC: Failed to set status upload interval for fd=%d\n", c->fd);
     }
 
-    int location_upload_interval = 30; // set to 30 seconds, change as needed
+    int location_upload_interval = 200; // set to 200 seconds, change as needed
     if(set_location_upload_interval(c, location_upload_interval)){
         printf("DATA_PROC: Location upload interval set to %d seconds for fd=%d\n", location_upload_interval, c->fd);
     } else {
