@@ -2,8 +2,8 @@
 
 # Compiler and flags
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c99 -g -fPIC
-LDFLAGS = -lm -lcjson -lpthread -lssl -lcrypto
+CFLAGS = -Wall -Wextra -std=c99 -g -fPIC -I/usr/include/postgresql
+LDFLAGS = -lm -lcjson -lpthread -lssl -lcrypto -lpq
 
 # Try to use pkg-config for libcurl if available, else fall back to -lcurl
 CURL_CFLAGS := $(shell pkg-config --cflags libcurl 2>/dev/null)
@@ -34,12 +34,12 @@ OBJ_DIR = obj
 BIN_DIR = bin
 
 # Source files
-SOURCES = main_file.c login_map.c json_writer.c offline_data.c lbs_latlong.c data_processing.c gps_data.c websocket_server.c
+SOURCES = main_file.c login_map.c json_writer.c offline_data.c lbs_latlong.c data_processing.c gps_data.c websocket_server.c database.c
 OBJECTS = $(SOURCES:%.c=$(OBJ_DIR)/%.o)
 TARGET = $(BIN_DIR)/tracker
 
 # Header files
-HEADERS = conn.h login_map.h json_writer.h offline_data.h lbs_latlong.h data_processing.h gps_data.h websocket_server.h
+HEADERS = conn.h login_map.h json_writer.h offline_data.h lbs_latlong.h data_processing.h gps_data.h websocket_server.h database.h
 
 # Default target
 all: $(TARGET)

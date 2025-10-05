@@ -20,6 +20,7 @@
 #include <netinet/in.h> 
 #include <openssl/buffer.h>
 #include "json_writer.h"
+#include "database.h"
 #define WS_PORT 8082
 #define WS_MAX_EVENTS 1000
 #define WS_BUF_SIZE 4096

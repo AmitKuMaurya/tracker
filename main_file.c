@@ -15,6 +15,7 @@
 #include "login_map.h"
 #include "data_processing.h"
 #include "websocket_server.h"
+#include "database.h"
 
 #define PORT 8081
 #define MAX_EVENTS 10000   // maximum epoll events
@@ -315,6 +316,11 @@ void handle_timer_event(int epfd, Conn *c) {
 }
 
 int main() {
+    if(db_init() != 0) {
+        fprintf(stderr, "Failed to initialize database connection\n");
+    }else{
+        printf("Database initialized successfully\n");
+    }
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd == -1) {
         perror("socket");
