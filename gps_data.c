@@ -125,13 +125,13 @@ int parse_gps_datetime(const unsigned char *cmd, GPSData *gps_data) {
         return -1;
     }
     
-    // Parse BCD encoded datetime: YY MM DD HH MM SS
-    gps_data->year = (cmd[0] >> 4) * 10 + (cmd[0] & 0x0F) + 2000;
-    gps_data->month = (cmd[1] >> 4) * 10 + (cmd[1] & 0x0F);
-    gps_data->day = (cmd[2] >> 4) * 10 + (cmd[2] & 0x0F);
-    gps_data->hour = (cmd[3] >> 4) * 10 + (cmd[3] & 0x0F);
-    gps_data->minute = (cmd[4] >> 4) * 10 + (cmd[4] & 0x0F);
-    gps_data->second = (cmd[5] >> 4) * 10 + (cmd[5] & 0x0F);
+    // Parse as direct hex values (not BCD)
+    gps_data->year = cmd[0] + 2000;    // Direct hex + 2000
+    gps_data->month = cmd[1];          // Direct hex value
+    gps_data->day = cmd[2];            // Direct hex value  
+    gps_data->hour = cmd[3];           // Direct hex value
+    gps_data->minute = cmd[4];         // Direct hex value
+    gps_data->second = cmd[5];         // Direct hex value
     
     // Validate datetime ranges
     if (gps_data->year < 2000 || gps_data->year > 2099 ||
@@ -146,6 +146,7 @@ int parse_gps_datetime(const unsigned char *cmd, GPSData *gps_data) {
     
     return 0;
 }
+
 
 int parse_gps_coordinates(const unsigned char *cmd, GPSData *gps_data) {
     if (!cmd || !gps_data) {

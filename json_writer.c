@@ -210,9 +210,13 @@ char* create_websocket_gps_message(const char *imei, const GPSData *gps_data) {
              gps_data->hour, gps_data->minute, gps_data->second);
     cJSON_AddStringToObject(root, "timestamp", timestamp);
     
-    // Add location data
-    cJSON_AddNumberToObject(root, "latitude", gps_data->latitude);
-    cJSON_AddNumberToObject(root, "longitude", gps_data->longitude);
+    // Add location data with controlled precision
+    char lat_str[32], lon_str[32];
+    snprintf(lat_str, sizeof(lat_str), "%.6f", gps_data->latitude);
+    snprintf(lon_str, sizeof(lon_str), "%.6f", gps_data->longitude);
+    
+    cJSON_AddStringToObject(root, "latitude", lat_str);
+    cJSON_AddStringToObject(root, "longitude", lon_str);
     cJSON_AddNumberToObject(root, "accuracy", 10.0); // GPS typically has ~10m accuracy
     
     // Add GPS-specific data
