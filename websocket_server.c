@@ -302,6 +302,7 @@ static int handle_websocket_handshake(int fd) {
         const size_t KEEP = 9;
         const char *last = (tmp_len > KEEP) ? device_id_tmp + (tmp_len - KEEP) : device_id_tmp;
         snprintf(normalized_device_id, sizeof normalized_device_id, "%s", last);
+        printf("WebSocket: Extracted device_id=%s\n", normalized_device_id);
     }
 
     // Now parse headers (use original_buf since buf was modified)
@@ -369,6 +370,7 @@ static int handle_websocket_handshake(int fd) {
         }
         pthread_mutex_unlock(&g_ws_connections_mutex);
     }
+    printf("WebSocket: Handshake response sent, device_id=%s\n", normalized_device_id[0] ? normalized_device_id : "none");
     const char* imei_id = db_get_imei_id(normalized_device_id);
     if (imei_id) {
         pthread_mutex_lock(&g_ws_connections_mutex);
