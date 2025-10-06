@@ -464,7 +464,7 @@ void lbs_command(Conn *c, const unsigned char *cmd, int len) {
         if (c && c->has_login_id) {
             char *ws_message = create_websocket_lbs_message(c->login_id, &data);
             if (ws_message) {
-                int sent_count = websocket_send_to_imei(c->login_id, ws_message, strlen(ws_message));
+                int sent_count = websocket_send_to_device_id(c->login_id, ws_message, strlen(ws_message));
                 if (sent_count > 0) {
                     printf("%s Sent LBS location to %d WebSocket client(s) for IMEI: %s\n", 
                            LOG_PREFIX, sent_count, c->login_id);

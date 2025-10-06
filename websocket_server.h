@@ -48,6 +48,8 @@ typedef struct {
     int fd;
     char imei[32];
     int has_imei;
+    char device_id[32];
+    int has_device_id;
     WSState state;
     char *write_buf;
     size_t write_buf_len;
@@ -66,7 +68,7 @@ typedef struct {
 int websocket_server_init(void);
 void websocket_server_start(void);
 void websocket_server_stop(void);
-int websocket_send_to_imei(const char *imei, const char *data, size_t len);
+int websocket_send_to_device_id(const char *device_id, const char *data, size_t len);
 int websocket_broadcast(const char *data, size_t len);
 
 #endif // WEBSOCKET_SERVER_H

@@ -171,19 +171,6 @@ static void *websocket_server_thread(void *arg) {
                             conn->state = WS_STATE_OPEN;
                             printf("WebSocket: Handshake complete for fd=%d\n", fd);
                             // Check online status and send appropriate message
-                        if (device_online_status(conn->imei)) {
-                            char* device_status_msg = device_online_status_json(1);  // here 1 mean device is online
-                                websocket_send_to_imei(conn->imei, device_status_msg, strlen(device_status_msg));
-                                free(device_status_msg);
-                            printf("WebSocket: IMEI %s is online\n", conn->imei);
-                        } else {
-                            char* device_status_msg = device_online_status_json(0);  // here 0 mean device is offline
-                            websocket_send_to_imei(conn->imei,"device is offline", strlen("device is offline"));
-                            websocket_send_to_imei(conn->imei, device_status_msg, strlen(device_status_msg));
-                            printf("device status online payload: %s\n",device_status_msg);
-                            free(device_status_msg);
-                            printf("WebSocket: IMEI %s is offline\n", conn->imei);
-                        }
                         } else {
                             printf("WebSocket: Handshake failed for fd=%d\n", fd);
                             remove_websocket_connection(fd);
@@ -246,6 +233,8 @@ static int accept_websocket_connection(int server_fd) {
     g_ws_connections[slot].state = WS_STATE_HANDSHAKE;
     g_ws_connections[slot].has_imei = 0;
     g_ws_connections[slot].imei[0] = '\0';
+    g_ws_connections[slot].has_device_id = 0;
+    g_ws_connections[slot].device_id[0] = '\0';
     g_ws_connections[slot].write_buf = NULL;
     g_ws_connections[slot].write_buf_len = 0;
     g_ws_connections[slot].write_buf_used = 0;
@@ -288,7 +277,7 @@ static int handle_websocket_handshake(int fd) {
     strncpy(original_buf, buf, sizeof(original_buf) - 1);
     original_buf[sizeof(original_buf) - 1] = '\0';
 
-    // Extract IMEI from the request line
+    // Extract device ID from the request line
     char *request_line_end = strstr(buf, "\r\n");
     if (request_line_end) *request_line_end = '\0';
     char *space1 = strchr(buf, ' ');
@@ -298,20 +287,21 @@ static int handle_websocket_handshake(int fd) {
         return -1;
     }
     *space2 = '\0';
-    const char *url = space1 + 1; // "/ws?imei=..."
-    const char *imei_q = strstr(url, "imei=");
-    char normalized_imei[32] = {0};
-    if (imei_q) {
-        imei_q += 5;
-        const char *amp = strchr(imei_q, '&');
-        size_t imei_len = amp ? (size_t)(amp - imei_q) : strlen(imei_q);
-        if (imei_len >= sizeof(normalized_imei)) imei_len = sizeof(normalized_imei) - 1;
-        char imei_tmp[32];
-        strncpy(imei_tmp, imei_q, imei_len);
-        imei_tmp[imei_len] = '\0';
-        size_t tmp_len = strlen(imei_tmp);
-        const char *last15 = (tmp_len > 15) ? (imei_tmp + (tmp_len - 15)) : imei_tmp;
-        snprintf(normalized_imei, sizeof(normalized_imei), "%s", last15);
+    const char *url = space1 + 1; // "/ws?device_id=..."
+    const char *device_id_q = strstr(url, "device_id=");
+    char normalized_device_id[32] = {0};
+    if (device_id_q) {
+        device_id_q += 11;
+        const char *amp = strchr(device_id_q, '&');
+        size_t device_id_len = amp ? (size_t)(amp - device_id_q) : strlen(device_id_q);
+        if (device_id_len >= sizeof(normalized_device_id)) device_id_len = sizeof(normalized_device_id) - 1;
+        char device_id_tmp[32];
+        strncpy(device_id_tmp, device_id_q, device_id_len);
+        device_id_tmp[device_id_len] = '\0';
+        size_t tmp_len = strlen(device_id_tmp);
+        const size_t KEEP = 9;
+        const char *last = (tmp_len > KEEP) ? device_id_tmp + (tmp_len - KEEP) : device_id_tmp;
+        snprintf(normalized_device_id, sizeof normalized_device_id, "%s", last);
     }
 
     // Now parse headers (use original_buf since buf was modified)
@@ -366,18 +356,45 @@ static int handle_websocket_handshake(int fd) {
         return -1;
     }
 
-    // Store IMEI on the connection if available
-    if (normalized_imei[0] != '\0') {
+    // Store device ID on the connection if available
+    if (normalized_device_id[0] != '\0') {
         pthread_mutex_lock(&g_ws_connections_mutex);
         for (int i = 0; i < MAX_WS_CONNECTIONS; i++) {
             if (g_ws_connections[i].fd == fd) {
-                strncpy(g_ws_connections[i].imei, normalized_imei, sizeof(g_ws_connections[i].imei) - 1);
+                strncpy(g_ws_connections[i].device_id, normalized_device_id, sizeof(g_ws_connections[i].device_id) - 1);
+                g_ws_connections[i].device_id[sizeof(g_ws_connections[i].device_id) - 1] = '\0';
+                g_ws_connections[i].has_device_id = 1;
+                break;
+            }
+        }
+        pthread_mutex_unlock(&g_ws_connections_mutex);
+    }
+    const char* imei_id = db_get_imei_id(normalized_device_id);
+    if (imei_id) {
+        pthread_mutex_lock(&g_ws_connections_mutex);
+        for (int i = 0; i < MAX_WS_CONNECTIONS; i++) {
+            if (g_ws_connections[i].fd == fd) {
+                strncpy(g_ws_connections[i].imei, imei_id, sizeof(g_ws_connections[i].imei) - 1);
                 g_ws_connections[i].imei[sizeof(g_ws_connections[i].imei) - 1] = '\0';
                 g_ws_connections[i].has_imei = 1;
                 break;
             }
         }
         pthread_mutex_unlock(&g_ws_connections_mutex);
+        printf("WebSocket: Mapped device_id %s to IMEI %s\n", normalized_device_id, imei_id);
+    } else {
+        printf("WebSocket: No IMEI mapping found for device_id %s\n", normalized_device_id);
+    }
+
+    // Check if device is online and send status message
+    int is_online = (imei_id && device_online_status(imei_id)) ? 1 : 0;
+    {
+        char *device_status_msg = device_online_status_json(is_online);
+        if (device_status_msg) {
+            websocket_send_to_device_id(normalized_device_id, device_status_msg, strlen(device_status_msg));
+            free(device_status_msg);
+        }
+        printf("WebSocket: IMEI %s is %s\n", imei_id ? imei_id : "unknown", is_online ? "online" : "offline");
     }
 
     return 0;
@@ -449,8 +466,8 @@ static int handle_websocket_frame(int fd) {
     return 0;
 }
 
-int websocket_send_to_imei(const char *imei, const char *data, size_t len) {
-    if (!imei || !data || len == 0) {
+int websocket_send_to_device_id(const char *device_id, const char *data, size_t len) {
+    if (!device_id || !data || len == 0) {
         return -1;
     }
     
@@ -459,9 +476,9 @@ int websocket_send_to_imei(const char *imei, const char *data, size_t len) {
     int count = 0;
     for (int i = 0; i < MAX_WS_CONNECTIONS; i++) {
         if (g_ws_connections[i].fd != -1 && 
-            g_ws_connections[i].has_imei &&
-            strcmp(g_ws_connections[i].imei, imei) == 0) {
-            
+            g_ws_connections[i].has_device_id &&
+            strcmp(g_ws_connections[i].device_id, device_id) == 0) {
+
             char frame[WS_BUF_SIZE];
             int frame_len = create_websocket_frame(frame, sizeof(frame), data, len, WS_OP_TEXT);
             
@@ -641,8 +658,8 @@ static void remove_websocket_connection(int fd) {
 static void cleanup_websocket_connection(int fd) {
     for (int i = 0; i < MAX_WS_CONNECTIONS; i++) {
         if (g_ws_connections[i].fd == fd) {
-            printf("WebSocket: Cleaning up connection fd=%d, IMEI=%s\n", 
-                   fd, g_ws_connections[i].has_imei ? g_ws_connections[i].imei : "unknown");
+            printf("WebSocket: Cleaning up connection fd=%d, device_id=%s\n", 
+                   fd, g_ws_connections[i].has_device_id ? g_ws_connections[i].device_id : "unknown");
             
             epoll_ctl(g_ws_server.epoll_fd, EPOLL_CTL_DEL, fd, NULL);
             close(fd);
