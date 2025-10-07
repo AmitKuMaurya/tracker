@@ -291,7 +291,7 @@ static int handle_websocket_handshake(int fd) {
     const char *device_id_q = strstr(url, "device_id=");
     char normalized_device_id[32] = {0};
     if (device_id_q) {
-        device_id_q += 11;
+        device_id_q += 10;// Move past "device_id="
         const char *amp = strchr(device_id_q, '&');
         size_t device_id_len = amp ? (size_t)(amp - device_id_q) : strlen(device_id_q);
         if (device_id_len >= sizeof(normalized_device_id)) device_id_len = sizeof(normalized_device_id) - 1;
