@@ -151,4 +151,66 @@ char* db_get_imei_id(const char* device_id) {
     return imei_id;
 }
 
+char* db_get_device_id(const char* imei_id) {
+    // Ensure we have a valid connection
+    if (!db_conn.is_connected || db_conn.conn == NULL || PQstatus(db_conn.conn) != CONNECTION_OK) {
+        fprintf(stderr, "DATABASE ERROR: No database connection\n");
+        return "device_id_not_found"; // Return string literal
+    }
+    
+    // Validate input
+    if (imei_id == NULL || strlen(imei_id) == 0) {
+        fprintf(stderr, "DATABASE ERROR: Invalid imei_id\n");
+        return "device_id_not_found"; // Return string literal
+    }
+    
+    // Prepare SQL query with parameter
+    const char* query = "SELECT \"device_id\" FROM devices WHERE \"imei_id\" = $1";
+    const char* params[] = {imei_id};
+    int param_lengths[] = {strlen(imei_id)};
+    int param_formats[] = {0}; // 0 = text
+    
+    printf("DATABASE: Executing query: SELECT \"device_id\" FROM devices WHERE \"imei_id\" = '%s'\n", imei_id);
+    
+    PGresult *result = PQexecParams(db_conn.conn, query, 1, NULL, params, param_lengths, param_formats, 0);
+    
+    if (PQresultStatus(result) != PGRES_TUPLES_OK) {
+        fprintf(stderr, "DATABASE ERROR: Query failed: %s\n", PQerrorMessage(db_conn.conn));
+        PQclear(result);
+        return "device_id_not_found";
+    }
+    
+    int num_rows = PQntuples(result);
+    if (num_rows == 0) {
+        printf("DATABASE: No device_id found for imei_id: %s\n", imei_id);
+        PQclear(result);
+        return "device_id_not_found";
+    }
+    
+    char *device_id_str = PQgetvalue(result, 0, 0);
+    if (device_id_str && strlen(device_id_str) > 0) {
+        // Allocate memory for the device_id and copy it
+        char *device_id = malloc(strlen(device_id_str) + 1);
+        if (device_id) {
+            strcpy(device_id, device_id_str);
+            printf("DATABASE: Fetched device_id: %s for imei_id: %s\n", device_id, imei_id);
+        } else {
+            printf("DATABASE: Memory allocation failed for device_id\n");
+            PQclear(result);
+            return "device_id_not_found";
+        }
+        
+        PQclear(result);
+        return device_id;
+    } else {
+        // Device ID is NULL or empty in database
+        printf("DATABASE: Device ID is NULL or empty for imei_id: %s\n", imei_id);
+        PQclear(result);
+        return "device_id_not_found"; // Return string literal
+    }
+    
+    PQclear(result);
+    return "device_id_not_found";
+}
+
 
