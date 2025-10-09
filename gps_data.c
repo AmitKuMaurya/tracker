@@ -104,7 +104,7 @@ void process_gps_command(Conn *c, const unsigned char *cmd, int len) {
     if (c && c->has_login_id && gps_data.is_positioned) {
         char *ws_message = create_websocket_gps_message(c->login_id, &gps_data);
         if (ws_message) {
-            int sent_count = websocket_send_to_device_id(c->login_id, ws_message, strlen(ws_message));
+            int sent_count = websocket_send_to_imei_id(c->login_id, ws_message, strlen(ws_message));
             if (sent_count > 0) {
                 printf("%s Sent GPS location to %d WebSocket client(s) for IMEI: %s\n", 
                        GPS_LOG_PREFIX, sent_count, c->login_id);

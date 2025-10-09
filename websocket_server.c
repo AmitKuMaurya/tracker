@@ -1,5 +1,6 @@
 
 #include "websocket_server.h"
+#include "database.h"
 
 
 static WSServer g_ws_server = {0};
@@ -393,7 +394,7 @@ static int handle_websocket_handshake(int fd) {
     {
         char *device_status_msg = device_online_status_json(is_online);
         if (device_status_msg) {
-            websocket_send_to_device_id(normalized_device_id, device_status_msg, strlen(device_status_msg));
+            websocket_send_to_imei_id(imei_id, device_status_msg, strlen(device_status_msg));
             free(device_status_msg);
         }
         printf("WebSocket: IMEI %s is %s\n", imei_id ? imei_id : "unknown", is_online ? "online" : "offline");
@@ -468,8 +469,8 @@ static int handle_websocket_frame(int fd) {
     return 0;
 }
 
-int websocket_send_to_device_id(const char *device_id, const char *data, size_t len) {
-    if (!device_id || !data || len == 0) {
+int websocket_send_to_imei_id(const char *imei_id, const char *data, size_t len) {
+    if (!imei_id || !data || len == 0) {
         return -1;
     }
     
@@ -478,9 +479,14 @@ int websocket_send_to_device_id(const char *device_id, const char *data, size_t 
     int count = 0;
     for (int i = 0; i < MAX_WS_CONNECTIONS; i++) {
         if (g_ws_connections[i].fd != -1 && 
-            g_ws_connections[i].has_device_id &&
-            strcmp(g_ws_connections[i].device_id, device_id) == 0) {
-
+            g_ws_connections[i].has_imei &&
+            strcmp(g_ws_connections[i].imei, imei_id) == 0) {
+            char* device_id = g_ws_connections[i].has_device_id ? g_ws_connections[i].device_id : "unknown";
+            printf("WebSocket: Sending data to device_id=%s (IMEI=%s) on fd=%d\n", 
+                   device_id, imei_id, g_ws_connections[i].fd);
+            if(!g_ws_connections[i].has_device_id) {
+                printf("WebSocket: Warning - Connection fd=%d has no associated device ID\n", g_ws_connections[i].fd);
+            }
             char frame[WS_BUF_SIZE];
             int frame_len = create_websocket_frame(frame, sizeof(frame), data, len, WS_OP_TEXT);
             
@@ -694,3 +700,4 @@ bool device_online_status(const char *imei) {
     
     return (login_map_get(imei) != NULL);
 }
+

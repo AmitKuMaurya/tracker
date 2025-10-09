@@ -194,23 +194,19 @@ char* db_get_device_id(const char* imei_id) {
         if (device_id) {
             strcpy(device_id, device_id_str);
             printf("DATABASE: Fetched device_id: %s for imei_id: %s\n", device_id, imei_id);
+            PQclear(result);
+            return device_id;
         } else {
             printf("DATABASE: Memory allocation failed for device_id\n");
             PQclear(result);
             return "device_id_not_found";
         }
-        
-        PQclear(result);
-        return device_id;
     } else {
         // Device ID is NULL or empty in database
         printf("DATABASE: Device ID is NULL or empty for imei_id: %s\n", imei_id);
         PQclear(result);
         return "device_id_not_found"; // Return string literal
     }
-    
-    PQclear(result);
-    return "device_id_not_found";
 }
 
 

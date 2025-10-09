@@ -19,5 +19,6 @@ void db_cleanup(void);
 int db_connect(void);
 void db_disconnect(void);
 char* db_get_imei_id(const char* device_id);
+char* db_get_device_id(const char* imei_id);
 
 #endif // DATABASE_H

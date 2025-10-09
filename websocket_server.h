@@ -68,7 +68,7 @@ typedef struct {
 int websocket_server_init(void);
 void websocket_server_start(void);
 void websocket_server_stop(void);
-int websocket_send_to_device_id(const char *device_id, const char *data, size_t len);
+int websocket_send_to_imei_id(const char *imei_id, const char *data, size_t len);
 int websocket_broadcast(const char *data, size_t len);
 
 #endif // WEBSOCKET_SERVER_H

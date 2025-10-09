@@ -123,7 +123,7 @@ void handle_connection_timeout(int epfd, Conn *c) {
            c->fd, c->has_login_id ? c->login_id : "unknown");
 
     char* device_status_msg = device_online_status_json(0);  // here 0 mean device is offline
-    websocket_send_to_device_id(c->login_id, device_status_msg, strlen(device_status_msg));
+    websocket_send_to_imei_id(c->login_id, device_status_msg, strlen(device_status_msg));
     free(device_status_msg);
     
     // Remove from login map

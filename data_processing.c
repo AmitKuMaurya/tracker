@@ -222,7 +222,7 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
     snprintf(c->login_id, sizeof(c->login_id), "%.15s", last15);
     // we will inform app to device status online
     char* device_status_msg = device_online_status_json(1);
-    websocket_send_to_device_id(c->login_id, device_status_msg, strlen(device_status_msg));
+    websocket_send_to_imei_id(c->login_id, device_status_msg, strlen(device_status_msg));
     free(device_status_msg);
     c->has_login_id = 1;
 
@@ -352,7 +352,7 @@ void process_device_details_command(Conn *c, const unsigned char *cmd, int len) 
     printf("  - Signal Strength: %d\n", signal_strength);     // Will print: 64%
     
     char* device_details_msg = device_details_json(battery_level,status_upload_interval,signal_strength);
-    websocket_send_to_device_id(c->login_id, device_details_msg, strlen(device_details_msg));
+    websocket_send_to_imei_id(c->login_id, device_details_msg, strlen(device_details_msg));
     free(device_details_msg);
 
     if(send(c->fd, cmd, len, 0)==len){
