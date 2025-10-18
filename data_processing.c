@@ -17,7 +17,7 @@
 #include <time.h>
 #include "data_processing.h"
 #include "gps_data.h"
-#include "login_map.h"
+#include "websocket_server.h"
 #include "offline_data.h"
 #include "websocket_server.h"
 #include "json_writer.h"
@@ -243,8 +243,8 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
 
     printf("DATA_PROC: Device login - IMEI: %s, fd: %d\n", c->login_id, c->fd);
     
-    // Register device in login map
-    login_map_set(c->login_id, c);
+    // Register device in IMEI hash map
+    websocket_imei_map_set(c->login_id, c);
     
     // Send success response: 7878 01 01 0D0A
     unsigned char response[] = {0x78, 0x78, 0x01, 0x01, 0x0D, 0x0A};

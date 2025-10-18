@@ -12,7 +12,7 @@
 #include <time.h>
 #include <stdint.h>
 #include "conn.h"
-#include "login_map.h"
+#include "websocket_server.h"
 #include "data_processing.h"
 #include "websocket_server.h"
 #include "database.h"
@@ -126,8 +126,8 @@ void handle_connection_timeout(int epfd, Conn *c) {
     websocket_send_to_imei_id(c->login_id, device_status_msg, strlen(device_status_msg));
     free(device_status_msg);
     
-    // Remove from login map
-    login_map_remove_for_conn(c);
+    // Remove from IMEI hash map
+    websocket_imei_map_remove_by_conn(c);
     
     // Remove timer from epoll and close it
     if (c->timer_fd != -1) {
@@ -159,8 +159,8 @@ void cleanup_connection(int epfd, Conn *c) {
     
     printf("CLEANUP: Cleaning up connection fd=%d\n", c->fd);
     
-    // Remove from login map
-    login_map_remove_for_conn(c);
+    // Remove from IMEI hash map
+    websocket_imei_map_remove_by_conn(c);
     
     // Clean up timer and its event data
     if (c->timer_fd != -1) {

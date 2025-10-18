@@ -34,12 +34,12 @@ OBJ_DIR = obj
 BIN_DIR = bin
 
 # Source files
-SOURCES = main_file.c login_map.c json_writer.c offline_data.c lbs_latlong.c data_processing.c gps_data.c websocket_server.c database.c
+SOURCES = main_file.c hash_map.c json_writer.c offline_data.c lbs_latlong.c data_processing.c gps_data.c websocket_server.c database.c
 OBJECTS = $(SOURCES:%.c=$(OBJ_DIR)/%.o)
 TARGET = $(BIN_DIR)/tracker
 
 # Header files
-HEADERS = conn.h login_map.h json_writer.h offline_data.h lbs_latlong.h data_processing.h gps_data.h websocket_server.h database.h
+HEADERS = conn.h hash_map.h json_writer.h offline_data.h lbs_latlong.h data_processing.h gps_data.h websocket_server.h database.h
 
 # Default target
 all: $(TARGET)
@@ -143,13 +143,13 @@ help:
 	@echo "  help       - Show this help"
 
 # Dependencies
-$(OBJ_DIR)/main_file.o: main_file.c conn.h login_map.h data_processing.h
-$(OBJ_DIR)/login_map.o: login_map.c conn.h login_map.h
+$(OBJ_DIR)/main_file.o: main_file.c conn.h websocket_server.h data_processing.h
+$(OBJ_DIR)/hash_map.o: hash_map.c conn.h hash_map.h
 $(OBJ_DIR)/json_writer.o: json_writer.c json_writer.h offline_data.h
 $(OBJ_DIR)/offline_data.o: offline_data.c offline_data.h conn.h json_writer.h lbs_latlong.h
 $(OBJ_DIR)/lbs_latlong.o: lbs_latlong.c lbs_latlong.h offline_data.h json_writer.h
-$(OBJ_DIR)/data_processing.o: data_processing.c data_processing.h conn.h gps_data.h login_map.h offline_data.h
+$(OBJ_DIR)/data_processing.o: data_processing.c data_processing.h conn.h gps_data.h websocket_server.h offline_data.h
 $(OBJ_DIR)/gps_data.o: gps_data.c gps_data.h conn.h websocket_server.h json_writer.h
-$(OBJ_DIR)/websocket_server.o: websocket_server.c websocket_server.h login_map.h
+$(OBJ_DIR)/websocket_server.o: websocket_server.c websocket_server.h hash_map.h
 
 .PHONY: all clean distclean install uninstall run debug release check format memcheck test-builds help

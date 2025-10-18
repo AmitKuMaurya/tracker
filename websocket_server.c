@@ -5,6 +5,10 @@
 
 static WSServer g_ws_server = {0};
 
+// Global hash map for IMEI to connection mapping
+static HashMap *g_imei_map = NULL;
+static pthread_mutex_t g_imei_map_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 // WebSocket connection management
 #define MAX_WS_CONNECTIONS 1000
 static WSConnection g_ws_connections[MAX_WS_CONNECTIONS];
@@ -29,9 +33,22 @@ static void remove_websocket_connection(int fd);
 static void cleanup_websocket_connection(int fd);
 bool device_online_status(const char *imei);
 
+// IMEI hash map management functions
+static void imei_map_set(const char *imei, Conn *conn);
+static void imei_map_remove_by_conn(Conn *conn);
+static Conn* imei_map_get(const char *imei);
+static const char* imei_map_get_imei_by_fd(int fd);
+
 int websocket_server_init(void) {
     memset(&g_ws_server, 0, sizeof(g_ws_server));
     memset(g_ws_connections, 0, sizeof(g_ws_connections));
+    
+    // Initialize IMEI hash map
+    g_imei_map = hash_map_create(256);
+    if (!g_imei_map) {
+        fprintf(stderr, "Failed to create IMEI hash map\n");
+        return -1;
+    }
     
     // Create server socket
     g_ws_server.server_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -119,6 +136,12 @@ void websocket_server_stop(void) {
     
     close(g_ws_server.epoll_fd);
     close(g_ws_server.server_fd);
+    
+    // Clean up IMEI hash map
+    pthread_mutex_lock(&g_imei_map_mutex);
+    hash_map_destroy(g_imei_map);
+    g_imei_map = NULL;
+    pthread_mutex_unlock(&g_imei_map_mutex);
     
     printf("WebSocket server stopped\n");
 }
@@ -336,7 +359,7 @@ static int handle_websocket_handshake(int fd) {
     }
 
     // Create Sec-WebSocket-Accept
-    char combined_key[256];
+    char combined_key[512];
     snprintf(combined_key, sizeof(combined_key), "%s%s", client_key, WS_MAGIC_STRING);
     unsigned char sha1_hash[SHA_DIGEST_LENGTH];
     SHA1((unsigned char *)combined_key, strlen(combined_key), sha1_hash);
@@ -691,13 +714,73 @@ static int make_socket_non_blocking(int fd) {
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
+// IMEI hash map management functions
+static void imei_map_set(const char *imei, Conn *conn) {
+    if (!imei || !conn || !g_imei_map) return;
+    
+    pthread_mutex_lock(&g_imei_map_mutex);
+    hash_map_set(g_imei_map, imei, conn);
+    pthread_mutex_unlock(&g_imei_map_mutex);
+}
+
+static void imei_map_remove_by_conn(Conn *conn) {
+    if (!conn || !g_imei_map) return;
+    
+    pthread_mutex_lock(&g_imei_map_mutex);
+    hash_map_remove_by_conn(g_imei_map, conn);
+    pthread_mutex_unlock(&g_imei_map_mutex);
+}
+
+static Conn* imei_map_get(const char *imei) {
+    if (!imei || !g_imei_map) return NULL;
+    
+    pthread_mutex_lock(&g_imei_map_mutex);
+    Conn *conn = hash_map_get(g_imei_map, imei);
+    pthread_mutex_unlock(&g_imei_map_mutex);
+    
+    return conn;
+}
+
+static const char* imei_map_get_imei_by_fd(int fd) {
+    if (!g_imei_map) return NULL;
+    
+    pthread_mutex_lock(&g_imei_map_mutex);
+    const char *imei = hash_map_get_key_by_fd(g_imei_map, fd);
+    pthread_mutex_unlock(&g_imei_map_mutex);
+    
+    return imei;
+}
+
 
 
 bool device_online_status(const char *imei) {
-    if (!imei) return false;
+    if (!imei || !g_imei_map) return false;
     
-    // Also check if there's a TCP connection in the login map
+    pthread_mutex_lock(&g_imei_map_mutex);
+    Conn *conn = hash_map_get(g_imei_map, imei);
+    pthread_mutex_unlock(&g_imei_map_mutex);
     
-    return (login_map_get(imei) != NULL);
+    return (conn != NULL);
+}
+
+// Public wrapper functions for IMEI map management
+void websocket_imei_map_set(const char *imei, Conn *conn) {
+    imei_map_set(imei, conn);
+}
+
+void websocket_imei_map_remove_by_conn(Conn *conn) {
+    imei_map_remove_by_conn(conn);
+}
+
+Conn* websocket_imei_map_get(const char *imei) {
+    return imei_map_get(imei);
+}
+
+const char* websocket_imei_map_get_imei_by_fd(int fd) {
+    return imei_map_get_imei_by_fd(fd);
+}
+
+bool websocket_device_online_status(const char *imei) {
+    return device_online_status(imei);
 }
 

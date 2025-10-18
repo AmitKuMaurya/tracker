@@ -4,7 +4,7 @@
 #include <openssl/bio.h>   // for Base64
 #include <openssl/evp.h>   // for Base64
 #include <pthread.h>
-#include "login_map.h"
+#include "hash_map.h"
 #include <unistd.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -70,5 +70,12 @@ void websocket_server_start(void);
 void websocket_server_stop(void);
 int websocket_send_to_imei_id(const char *imei_id, const char *data, size_t len);
 int websocket_broadcast(const char *data, size_t len);
+
+// IMEI connection management functions (for external use)
+void websocket_imei_map_set(const char *imei, Conn *conn);
+void websocket_imei_map_remove_by_conn(Conn *conn);
+Conn* websocket_imei_map_get(const char *imei);
+const char* websocket_imei_map_get_imei_by_fd(int fd);
+bool websocket_device_online_status(const char *imei);
 
 #endif // WEBSOCKET_SERVER_H
