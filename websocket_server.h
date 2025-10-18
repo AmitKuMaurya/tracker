@@ -4,7 +4,6 @@
 #include <openssl/bio.h>   // for Base64
 #include <openssl/evp.h>   // for Base64
 #include <pthread.h>
-#include "login_map.h"
 #include <unistd.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -20,6 +19,7 @@
 #include <netinet/in.h> 
 #include <openssl/buffer.h>
 #include "json_writer.h"
+#include "database.h"
 #define WS_PORT 8082
 #define WS_MAX_EVENTS 1000
 #define WS_BUF_SIZE 4096
@@ -47,6 +47,8 @@ typedef struct {
     int fd;
     char imei[32];
     int has_imei;
+    char device_id[32];
+    int has_device_id;
     WSState state;
     char *write_buf;
     size_t write_buf_len;
@@ -65,7 +67,7 @@ typedef struct {
 int websocket_server_init(void);
 void websocket_server_start(void);
 void websocket_server_stop(void);
-int websocket_send_to_imei(const char *imei, const char *data, size_t len);
+int websocket_send_to_imei_id(const char *imei_id, const char *data, size_t len);
 int websocket_broadcast(const char *data, size_t len);
 
 #endif // WEBSOCKET_SERVER_H

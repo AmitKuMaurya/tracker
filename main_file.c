@@ -12,9 +12,10 @@
 #include <time.h>
 #include <stdint.h>
 #include "conn.h"
-#include "login_map.h"
+#include "hashmap.h"
 #include "data_processing.h"
 #include "websocket_server.h"
+#include "database.h"
 
 #define PORT 8081
 #define MAX_EVENTS 10000   // maximum epoll events
@@ -122,11 +123,11 @@ void handle_connection_timeout(int epfd, Conn *c) {
            c->fd, c->has_login_id ? c->login_id : "unknown");
 
     char* device_status_msg = device_online_status_json(0);  // here 0 mean device is offline
-    websocket_send_to_imei(c->login_id, device_status_msg, strlen(device_status_msg));
+    websocket_send_to_imei_id(c->login_id, device_status_msg, strlen(device_status_msg));
     free(device_status_msg);
     
-    // Remove from login map
-    login_map_remove_for_conn(c);
+    // Remove from hashmap
+    hash_map_remove_tcp_connection_by_fd(c->fd);
     
     // Remove timer from epoll and close it
     if (c->timer_fd != -1) {
@@ -158,8 +159,8 @@ void cleanup_connection(int epfd, Conn *c) {
     
     printf("CLEANUP: Cleaning up connection fd=%d\n", c->fd);
     
-    // Remove from login map
-    login_map_remove_for_conn(c);
+    // Remove from hashmap
+    hash_map_remove_tcp_connection_by_fd(c->fd);
     
     // Clean up timer and its event data
     if (c->timer_fd != -1) {
@@ -315,6 +316,19 @@ void handle_timer_event(int epfd, Conn *c) {
 }
 
 int main() {
+    if(db_init() != 0) {
+        fprintf(stderr, "Failed to initialize database connection\n");
+    }else{
+        printf("Database initialized successfully\n");
+    }
+    
+    // Initialize hashmap
+    if(hash_map_init() != 0) {
+        fprintf(stderr, "Failed to initialize hashmap\n");
+        exit(EXIT_FAILURE);
+    } else {
+        printf("Hashmap initialized successfully\n");
+    }
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd == -1) {
         perror("socket");

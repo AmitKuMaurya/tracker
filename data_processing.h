@@ -74,8 +74,19 @@ void process_heartbeat_command(Conn *c, const unsigned char *cmd, int len);
 bool set_heartbeat(Conn *c, int heartbeat_interval);
 
 /**
- @brief Process device details command (protocol 0x13)
+ * @brief Process device details/status command (protocol 0x13)
+ * 
+ * Handles device status packets containing battery level, firmware version,
+ * timezone, upload interval, and signal strength information.
+ * 
+ * @param c Connection structure
+ * @param cmd Command buffer containing the status packet
+ * @param len Command length
  */
-void process_device_details_command(Conn *c, const unsigned char *cmd, int len);
+ void process_device_details_command(Conn *c, const unsigned char *cmd, int len);
+
+ bool set_status_upload_interval(Conn *c, int interval_minutes);
+
+
 
 #endif // DATA_PROCESSING_H

@@ -98,17 +98,6 @@ int parse_gps_coordinates(const unsigned char *cmd, GPSData *gps_data);
 int parse_gps_status(const unsigned char *cmd, GPSData *gps_data);
 
 /**
- * @brief Validate GPS packet length and structure
- * 
- * Performs basic validation of GPS packet format and length.
- * 
- * @param cmd Command buffer
- * @param len Command length
- * @return 0 if valid, -1 if invalid
- */
-int validate_gps_packet(const unsigned char *cmd, int len);
-
-/**
  * @brief Send GPS response to device
  * 
  * Sends the required GPS response back to the device according
