@@ -159,7 +159,7 @@ void cleanup_connection(int epfd, Conn *c) {
     
     printf("CLEANUP: Cleaning up connection fd=%d\n", c->fd);
     
-    // Remove from hashmap
+    // Remove from hashmap using fast FD lookup
     hash_map_remove_tcp_connection_by_fd(c->fd);
     
     // Clean up timer and its event data

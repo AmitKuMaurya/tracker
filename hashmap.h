@@ -82,6 +82,7 @@ int hash_map_is_device_online(const char *imei);
 int hash_map_has_client_connected(const char *imei);
 int hash_map_is_device_registered(const char *imei);
 
+
 // Get basic info
 const char* hash_map_get_device_id(const char *imei);
 time_t hash_map_get_last_activity(const char *imei);
@@ -107,6 +108,20 @@ void hash_map_set_cleanup_callbacks(void (*tcp_cleanup)(Conn *), void (*ws_clean
 // ==================== NOTIFICATION CALLBACKS ====================
 typedef void (*connection_state_callback_t)(const char *imei, int connection_type, int is_connected);
 void hash_map_set_state_callback(connection_state_callback_t callback);
+
+//=============persinal=================
+void fd_map_set_tcp(int fd, const char *imei);
+void fd_map_set_ws(int fd, const char *imei);
+const char* fd_map_get_tcp_imei(int fd);
+const char* fd_map_get_ws_imei(int fd);
+void fd_map_remove_tcp(int fd);
+void fd_map_remove_ws(int fd);
+
+// Fast IMEI lookup from FD (for data processing)
+const char* hash_map_get_imei_by_fd(int fd);
+
+// Fast connection status check by FD
+int hash_map_is_connection_online_by_fd(int fd);
 
 #define CONN_TYPE_TCP 1
 #define CONN_TYPE_WS  2

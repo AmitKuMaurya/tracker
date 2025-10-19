@@ -8,6 +8,15 @@
 #include <errno.h>
 #include <assert.h>
 
+#define MAX_FD_LIMIT 4096  // choose depending on how many sockets you expect
+
+// Two lookup arrays
+static char* tcp_fd_to_imei[MAX_FD_LIMIT];
+static char* ws_fd_to_imei[MAX_FD_LIMIT];
+
+// Lock for thread safety
+static pthread_rwlock_t fd_map_lock = PTHREAD_RWLOCK_INITIALIZER;
+
 // Global hash map instance
 static UnifiedHashMap g_hash_map = {0};
 static connection_state_callback_t g_state_callback = NULL;
@@ -130,6 +139,11 @@ int hash_map_init(void) {
     g_hash_map.last_cleanup = time(NULL);
     g_hash_map.tcp_cleanup_cb = NULL;
     g_hash_map.ws_cleanup_cb = NULL;
+
+    pthread_rwlock_wrlock(&fd_map_lock);
+    memset(tcp_fd_to_imei, 0, sizeof(tcp_fd_to_imei));
+    memset(ws_fd_to_imei, 0, sizeof(ws_fd_to_imei));
+    pthread_rwlock_unlock(&fd_map_lock);
     
     printf("Hash map initialized with %d buckets\n", HASH_MAP_CAPACITY);
     return 0;
@@ -163,6 +177,12 @@ void hash_map_cleanup(void) {
     
     // Destroy locks
     destroy_bucket_locks(g_hash_map.imei_buckets);
+    pthread_rwlock_wrlock(&fd_map_lock);
+    for (int i = 0; i < MAX_FD_LIMIT; i++) {
+        free(tcp_fd_to_imei[i]);
+        free(ws_fd_to_imei[i]);
+    }
+    pthread_rwlock_unlock(&fd_map_lock);
     
     printf("Hash map cleanup completed\n");
 }
@@ -370,6 +390,9 @@ int hash_map_set_tcp_connection(const char *imei, const char *device_id, Conn *t
     
     device_entry_unref(entry);
     
+    // Set up fast FD-to-IMEI mapping for O(1) lookups
+    fd_map_set_tcp(tcp_conn->fd, imei);
+    
     printf("TCP connection SET for IMEI: %s (fd=%d)\n", imei, tcp_conn->fd);
     return 0;
 }
@@ -449,6 +472,11 @@ int hash_map_remove_tcp_connection(const char *imei) {
     
     device_entry_unref(entry);
     
+    // Clean up FD mapping if we have the connection
+    if (entry->tcp_conn) {
+        fd_map_remove_tcp(entry->tcp_conn->fd);
+    }
+    
     printf("TCP connection REMOVED for IMEI: %s\n", imei);
     return 0;
 }
@@ -484,6 +512,8 @@ int hash_map_remove_ws_connection(const char *imei) {
     
     device_entry_unref(entry);
     
+    // Note: WebSocket FD mapping cleanup is handled in websocket_server.c
+    
     printf("WebSocket connection REMOVED for IMEI: %s\n", imei);
     return 0;
 }
@@ -491,26 +521,39 @@ int hash_map_remove_ws_connection(const char *imei) {
 void hash_map_remove_tcp_connection_by_fd(int fd) {
     if (fd <= 0) return;
     
-    // Search through all IMEI buckets for this fd
-    for (int i = 0; i < HASH_MAP_CAPACITY; i++) {
-        pthread_rwlock_rdlock(&g_hash_map.imei_buckets[i].rwlock);
-        
-        DeviceEntry *current = g_hash_map.imei_buckets[i].head;
-        while (current) {
-            if (current->tcp_conn && current->tcp_conn->fd == fd) {
-                device_entry_ref(current);
-                pthread_rwlock_unlock(&g_hash_map.imei_buckets[i].rwlock);
-                
-                hash_map_remove_tcp_connection(current->imei);
-                device_entry_unref(current);
-                return;
+    // Use fast FD-to-IMEI lookup instead of O(n) search
+    const char *imei = fd_map_get_tcp_imei(fd);
+    if (imei) {
+        printf("FAST LOOKUP: Found IMEI %s for fd %d\n", imei, fd);
+        hash_map_remove_tcp_connection(imei);
+        fd_map_remove_tcp(fd);  // Clean up FD mapping
+    } else {
+        printf("WARNING: No IMEI mapping found for fd %d, falling back to slow search\n", fd);
+        // Fallback to slow search for safety
+        for (int i = 0; i < HASH_MAP_CAPACITY; i++) {
+            pthread_rwlock_rdlock(&g_hash_map.imei_buckets[i].rwlock);
+            
+            DeviceEntry *current = g_hash_map.imei_buckets[i].head;
+            while (current) {
+                if (current->tcp_conn && current->tcp_conn->fd == fd) {
+                    device_entry_ref(current);
+                    pthread_rwlock_unlock(&g_hash_map.imei_buckets[i].rwlock);
+                    
+                    hash_map_remove_tcp_connection(current->imei);
+                    device_entry_unref(current);
+                    return;
+                }
+                current = current->next;
             }
-            current = current->next;
+            
+            pthread_rwlock_unlock(&g_hash_map.imei_buckets[i].rwlock);
         }
-        
-        pthread_rwlock_unlock(&g_hash_map.imei_buckets[i].rwlock);
     }
 }
+
+// Note: WebSocket FD-based removal is handled in websocket_server.c
+
+
 
 // ==================== SAFE STATUS QUERIES ====================
 
@@ -758,3 +801,79 @@ void hash_map_set_cleanup_callbacks(void (*tcp_cleanup)(Conn *), void (*ws_clean
 void hash_map_set_state_callback(connection_state_callback_t callback) {
     g_state_callback = callback;
 }
+
+
+//=============persinal=================
+
+void fd_map_set_tcp(int fd, const char *imei) {
+    if (fd < 0 || fd >= MAX_FD_LIMIT || !imei) return;
+
+    pthread_rwlock_wrlock(&fd_map_lock);
+    free(tcp_fd_to_imei[fd]);
+    tcp_fd_to_imei[fd] = strdup(imei);
+    pthread_rwlock_unlock(&fd_map_lock);
+}
+
+void fd_map_set_ws(int fd, const char *imei) {
+    if (fd < 0 || fd >= MAX_FD_LIMIT || !imei) return;
+
+    pthread_rwlock_wrlock(&fd_map_lock);
+    free(ws_fd_to_imei[fd]);
+    ws_fd_to_imei[fd] = strdup(imei);
+    pthread_rwlock_unlock(&fd_map_lock);
+}
+const char* fd_map_get_tcp_imei(int fd) {
+    if (fd < 0 || fd >= MAX_FD_LIMIT) return NULL;
+    pthread_rwlock_rdlock(&fd_map_lock);
+    const char *imei = tcp_fd_to_imei[fd];
+    pthread_rwlock_unlock(&fd_map_lock);
+    return imei;
+}
+
+const char* fd_map_get_ws_imei(int fd) {
+    if (fd < 0 || fd >= MAX_FD_LIMIT) return NULL;
+    pthread_rwlock_rdlock(&fd_map_lock);
+    const char *imei = ws_fd_to_imei[fd];
+    pthread_rwlock_unlock(&fd_map_lock);
+    return imei;
+}
+void fd_map_remove_tcp(int fd) {
+    if (fd < 0 || fd >= MAX_FD_LIMIT) return;
+    pthread_rwlock_wrlock(&fd_map_lock);
+    free(tcp_fd_to_imei[fd]);
+    tcp_fd_to_imei[fd] = NULL;
+    pthread_rwlock_unlock(&fd_map_lock);
+}
+
+void fd_map_remove_ws(int fd) {
+    if (fd < 0 || fd >= MAX_FD_LIMIT) return;
+    pthread_rwlock_wrlock(&fd_map_lock);
+    free(ws_fd_to_imei[fd]);
+    ws_fd_to_imei[fd] = NULL;
+    pthread_rwlock_unlock(&fd_map_lock);
+}
+
+// Fast IMEI lookup from FD (tries TCP first, then WebSocket)
+const char* hash_map_get_imei_by_fd(int fd) {
+    if (fd <= 0) return NULL;
+    
+    // Try TCP first (most common)
+    const char *imei = fd_map_get_tcp_imei(fd);
+    if (imei) {
+        return imei;
+    }
+    
+    // Try WebSocket
+    return fd_map_get_ws_imei(fd);
+}
+
+// Fast connection status check by FD
+int hash_map_is_connection_online_by_fd(int fd) {
+    if (fd <= 0) return 0;
+    
+    const char *imei = hash_map_get_imei_by_fd(fd);
+    if (!imei) return 0;
+    
+    return hash_map_is_device_online(imei);
+}
+

@@ -382,6 +382,12 @@ static int handle_websocket_handshake(int fd) {
                 strncpy(g_ws_connections[i].imei, imei_id, sizeof(g_ws_connections[i].imei) - 1);
                 g_ws_connections[i].imei[sizeof(g_ws_connections[i].imei) - 1] = '\0';
                 g_ws_connections[i].has_imei = 1;
+                
+                // Register WebSocket connection in hashmap for fast lookups
+                hash_map_set_ws_connection(imei_id, (struct WSConnection*)&g_ws_connections[i]);
+                
+                // Set up fast FD-to-IMEI mapping for O(1) lookups
+                fd_map_set_ws(fd, imei_id);
                 break;
             }
         }
@@ -670,6 +676,12 @@ static void cleanup_websocket_connection(int fd) {
         if (g_ws_connections[i].fd == fd) {
             printf("WebSocket: Cleaning up connection fd=%d, device_id=%s\n", 
                    fd, g_ws_connections[i].has_device_id ? g_ws_connections[i].device_id : "unknown");
+            
+            // Remove from hashmap if we have an IMEI
+            if (g_ws_connections[i].has_imei) {
+                hash_map_remove_ws_connection(g_ws_connections[i].imei);
+                fd_map_remove_ws(fd);  // Clean up FD mapping
+            }
             
             epoll_ctl(g_ws_server.epoll_fd, EPOLL_CTL_DEL, fd, NULL);
             close(fd);
