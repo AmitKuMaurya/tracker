@@ -2,7 +2,7 @@
  * @file gps_data.h
  * @brief Header file for GPS data processing module
  * 
- * This module handles GPS-specific data processing including coordinate
+ * This module handles GPS-specific data processing including coord
  * conversion, datetime parsing, speed/heading calculation, and GPS
  * positioning status validation.
  * 
