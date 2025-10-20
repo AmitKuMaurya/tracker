@@ -877,3 +877,43 @@ int hash_map_is_connection_online_by_fd(int fd) {
     return hash_map_is_device_online(imei);
 }
 
+// IMEI to Device ID mapping functions
+const char* hash_map_get_device_id_by_imei(const char *imei) {
+    if (!imei) return NULL;
+    
+    DeviceEntry *entry = hash_map_find_by_imei(imei);
+    if (!entry) return NULL;
+    
+    const char *device_id = entry->device_id;
+    device_entry_unref(entry);
+    
+    // Return device_id if available, otherwise return IMEI as fallback
+    return (device_id && strlen(device_id) > 0) ? device_id : imei;
+}
+
+const char* hash_map_get_imei_by_device_id(const char *device_id) {
+    if (!device_id) return NULL;
+    
+    // Search through all entries to find device_id match
+    for (int i = 0; i < HASH_MAP_CAPACITY; i++) {
+        pthread_rwlock_rdlock(&g_hash_map.imei_buckets[i].rwlock);
+        
+        DeviceEntry *current = g_hash_map.imei_buckets[i].head;
+        while (current) {
+            if (current->device_id[0] != '\0' && strcmp(current->device_id, device_id) == 0) {
+                device_entry_ref(current);
+                pthread_rwlock_unlock(&g_hash_map.imei_buckets[i].rwlock);
+                
+                const char *imei = current->imei;
+                device_entry_unref(current);
+                return imei;
+            }
+            current = current->next;
+        }
+        
+        pthread_rwlock_unlock(&g_hash_map.imei_buckets[i].rwlock);
+    }
+    
+    return NULL;
+}
+

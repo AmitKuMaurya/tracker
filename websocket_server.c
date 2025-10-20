@@ -514,6 +514,22 @@ int websocket_send_to_imei_id(const char *imei_id, const char *data, size_t len)
     return count;
 }
 
+int websocket_send_to_device_id(const char *device_id, const char *data, size_t len) {
+    if (!device_id || !data || len == 0) {
+        return -1;
+    }
+    
+    // Convert device_id to IMEI for internal lookup
+    const char *imei = hash_map_get_imei_by_device_id(device_id);
+    if (!imei) {
+        printf("WebSocket: No IMEI found for device_id %s\n", device_id);
+        return -1;
+    }
+    
+    // Use existing IMEI-based function
+    return websocket_send_to_imei_id(imei, data, len);
+}
+
 int websocket_broadcast(const char *data, size_t len) {
     if (!data || len == 0) {
         return -1;

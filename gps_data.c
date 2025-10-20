@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 /**
  * @file gps_data.c
  * @brief Implementation file for GPS data processing module
@@ -18,6 +19,7 @@
 #include <sys/socket.h>
 #include "gps_data.h"
 #include "websocket_server.h"
+#include "hashmap.h"
 #include "json_writer.h"
 
 /* Constants */
@@ -104,7 +106,14 @@ void process_gps_command(Conn *c, const unsigned char *cmd, int len) {
     if (c && c->has_login_id && gps_data.is_positioned) {
         char *ws_message = create_websocket_gps_message(c->login_id, &gps_data);
         if (ws_message) {
-            int sent_count = websocket_send_to_imei_id(c->login_id, ws_message, strlen(ws_message));
+            // Get device_id for this IMEI and send to device_id
+            const char *device_id = hash_map_get_device_id_by_imei(c->login_id);
+            int sent_count;
+            if (device_id) {
+                sent_count = websocket_send_to_device_id(device_id, ws_message, strlen(ws_message));
+            } else {
+                sent_count = websocket_send_to_imei_id(c->login_id, ws_message, strlen(ws_message));
+            }
             if (sent_count > 0) {
                 printf("%s Sent GPS location to %d WebSocket client(s) for IMEI: %s\n", 
                        GPS_LOG_PREFIX, sent_count, c->login_id);

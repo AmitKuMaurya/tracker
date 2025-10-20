@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 /**
  * @file offline_data.c
  * @brief LBS (Location Based Services) data processing module
@@ -20,6 +21,7 @@
 #include "json_writer.h"
 #include "lbs_latlong.h"
 #include "websocket_server.h"
+#include "hashmap.h"
 
 /* Constants and Data Structures are now defined in offline_data.h */
 
@@ -464,7 +466,14 @@ void lbs_command(Conn *c, const unsigned char *cmd, int len) {
         if (c && c->has_login_id) {
             char *ws_message = create_websocket_lbs_message(c->login_id, &data);
             if (ws_message) {
-                int sent_count = websocket_send_to_imei_id(c->login_id, ws_message, strlen(ws_message));
+                // Get device_id for this IMEI and send to device_id
+                const char *device_id = hash_map_get_device_id_by_imei(c->login_id);
+                int sent_count;
+                if (device_id) {
+                    sent_count = websocket_send_to_device_id(device_id, ws_message, strlen(ws_message));
+                } else {
+                    sent_count = websocket_send_to_imei_id(c->login_id, ws_message, strlen(ws_message));
+                }
                 if (sent_count > 0) {
                     printf("%s Sent LBS location to %d WebSocket client(s) for IMEI: %s\n", 
                            LOG_PREFIX, sent_count, c->login_id);

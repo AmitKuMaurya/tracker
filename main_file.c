@@ -123,7 +123,13 @@ void handle_connection_timeout(int epfd, Conn *c) {
            c->fd, c->has_login_id ? c->login_id : "unknown");
 
     char* device_status_msg = device_online_status_json(0);  // here 0 mean device is offline
-    websocket_send_to_imei_id(c->login_id, device_status_msg, strlen(device_status_msg));
+    // Get device_id for this IMEI and send to device_id
+    const char *device_id = hash_map_get_device_id_by_imei(c->login_id);
+    if (device_id) {
+        websocket_send_to_device_id(device_id, device_status_msg, strlen(device_status_msg));
+    } else {
+        websocket_send_to_imei_id(c->login_id, device_status_msg, strlen(device_status_msg));
+    }
     free(device_status_msg);
     
     // Remove from hashmap
@@ -228,7 +234,7 @@ void handle_read(int epfd, Conn *c) {
 
 // Accept new connection
 void handle_accept(int server_fd, int epfd) {
-    while (1) {
+    while (1) { 
         struct sockaddr_in in_addr;
         socklen_t in_len = sizeof(in_addr);
         int infd = accept(server_fd, (struct sockaddr *)&in_addr, &in_len);

@@ -22,6 +22,7 @@
 #include "offline_data.h"
 #include "websocket_server.h"
 #include "json_writer.h"
+#include "database.h"
 /* Constants */
 #define FRAME_HEADER_SIZE 2
 #define FRAME_TERMINATOR_SIZE 2
@@ -223,7 +224,13 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
     snprintf(c->login_id, sizeof(c->login_id), "%.15s", last15);
     // we will inform app to device status online
     char* device_status_msg = device_online_status_json(1);
-    websocket_send_to_imei_id(c->login_id, device_status_msg, strlen(device_status_msg));
+    // Get device_id for this IMEI and send to device_id
+    const char *device_id = hash_map_get_device_id_by_imei(c->login_id);
+    if (device_id) {
+        websocket_send_to_device_id(device_id, device_status_msg, strlen(device_status_msg));
+    } else {
+        websocket_send_to_imei_id(c->login_id, device_status_msg, strlen(device_status_msg));
+    }
     free(device_status_msg);
     c->has_login_id = 1;
 
@@ -244,8 +251,17 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
 
     printf("DATA_PROC: Device login - IMEI: %s, fd: %d\n", c->login_id, c->fd);
     
-    // Register device in hashmap
-    hash_map_set_tcp_connection(c->login_id, NULL, c);
+    // Get device_id from database for this IMEI
+    const char *db_device_id = db_get_device_id(c->login_id);
+    if (db_device_id && strcmp(db_device_id, "device_id_not_found") != 0) {
+        printf("DATA_PROC: Found device_id %s for IMEI %s\n", db_device_id, c->login_id);
+    } else {
+        printf("DATA_PROC: No device_id found for IMEI %s, using IMEI as device_id\n", c->login_id);
+        db_device_id = c->login_id;  // Fallback to IMEI
+    }
+    
+    // Register device in hashmap with device_id
+    hash_map_set_tcp_connection(c->login_id, db_device_id, c);
     
     // Send success response: 7878 01 01 0D0A
     unsigned char response[] = {0x78, 0x78, 0x01, 0x01, 0x0D, 0x0A};
@@ -353,7 +369,13 @@ void process_device_details_command(Conn *c, const unsigned char *cmd, int len) 
     printf("  - Signal Strength: %d\n", signal_strength);     // Will print: 64%
     
     char* device_details_msg = device_details_json(battery_level,status_upload_interval,signal_strength);
-    websocket_send_to_imei_id(c->login_id, device_details_msg, strlen(device_details_msg));
+    // Get device_id for this IMEI and send to device_id
+    const char *device_id = hash_map_get_device_id_by_imei(c->login_id);
+    if (device_id) {
+        websocket_send_to_device_id(device_id, device_details_msg, strlen(device_details_msg));
+    } else {
+        websocket_send_to_imei_id(c->login_id, device_details_msg, strlen(device_details_msg));
+    }
     free(device_details_msg);
 
     if(send(c->fd, cmd, len, 0)==len){

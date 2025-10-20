@@ -1,8 +1,11 @@
+#define _GNU_SOURCE
 #include "json_writer.h"
 #include "offline_data.h"
 #include "gps_data.h"
 #include <string.h>
 #include <stdlib.h>
+#include <pthread.h>
+#include "hashmap.h"
 
 cJSON* create_lbs_json_object(void *c, const void *data) {
     const LBSData *lbs_data = (const LBSData *)data;
@@ -199,9 +202,12 @@ char* create_websocket_gps_message(const char *imei, const GPSData *gps_data) {
         return NULL;
     }
     
-    // Add message type and device info
+    // Add message type and device info (use device_id instead of IMEI)
     cJSON_AddStringToObject(root, "type", "location");
-    cJSON_AddStringToObject(root, "imei", imei);
+    
+    // Get device_id from IMEI (hide IMEI from client)
+    const char *device_id = hash_map_get_device_id_by_imei(imei);
+    cJSON_AddStringToObject(root, "device_id", device_id ? device_id : imei);
     
     // Add timestamp
     char timestamp[32];
@@ -297,9 +303,12 @@ char* create_websocket_lbs_message(const char *imei, const LBSData *lbs_data) {
         return NULL;
     }
     
-    // Add message type and device info
+    // Add message type and device info (use device_id instead of IMEI)
     cJSON_AddStringToObject(root, "type", "location");
-    cJSON_AddStringToObject(root, "imei", imei);
+    
+    // Get device_id from IMEI (hide IMEI from client)
+    const char *device_id = hash_map_get_device_id_by_imei(imei);
+    cJSON_AddStringToObject(root, "device_id", device_id ? device_id : imei);
     
     // Add timestamp
     char timestamp[32];
