@@ -811,6 +811,9 @@ void fd_map_set_tcp(int fd, const char *imei) {
     pthread_rwlock_wrlock(&fd_map_lock);
     free(tcp_fd_to_imei[fd]);
     tcp_fd_to_imei[fd] = strdup(imei);
+    if (!tcp_fd_to_imei[fd]) {
+        fprintf(stderr, "fd_map_set_tcp: strdup failed for fd=%d (errno=%d)\n", fd, errno);
+    }
     pthread_rwlock_unlock(&fd_map_lock);
 }
 
@@ -820,6 +823,9 @@ void fd_map_set_ws(int fd, const char *imei) {
     pthread_rwlock_wrlock(&fd_map_lock);
     free(ws_fd_to_imei[fd]);
     ws_fd_to_imei[fd] = strdup(imei);
+    if (!ws_fd_to_imei[fd]) {
+        fprintf(stderr, "fd_map_set_ws: strdup failed for fd=%d (errno=%d)\n", fd, errno);
+    }
     pthread_rwlock_unlock(&fd_map_lock);
 }
 const char* fd_map_get_tcp_imei(int fd) {

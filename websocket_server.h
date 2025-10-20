@@ -50,6 +50,7 @@ typedef struct {
     char device_id[32];
     int has_device_id;
     WSState state;
+    int cleanup_in_progress;
     char *write_buf;
     size_t write_buf_len;
     size_t write_buf_used;

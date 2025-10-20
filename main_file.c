@@ -382,6 +382,8 @@ int main() {
     event.events = EPOLLIN | EPOLLET;
     if (epoll_ctl(epfd, EPOLL_CTL_ADD, server_fd, &event) == -1) {
         perror("epoll_ctl: listen_sock");
+        close(epfd);
+        close(server_fd);
         exit(EXIT_FAILURE);
     }
 
@@ -389,6 +391,11 @@ int main() {
 
     while (1) {
         int n = epoll_wait(epfd, events, MAX_EVENTS, -1);
+        if (n == -1) {
+            if (errno == EINTR) continue;
+            perror("epoll_wait");
+            break;
+        }
         for (int i = 0; i < n; i++) {
             if (events[i].data.fd == server_fd) {
                 // Server socket - new connection
@@ -405,6 +412,10 @@ int main() {
                 
                 if (event_data->event_type == EVENT_TYPE_SOCKET) {
                     // Socket event - data received or connection closed
+                    if (events[i].events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
+                        cleanup_connection(epfd, c);
+                        continue;
+                    }
                     handle_read(epfd, c);
                 } else if (event_data->event_type == EVENT_TYPE_TIMER) {
                     // Timer event - connection timeout
@@ -418,6 +429,7 @@ int main() {
     }
 
     free(events);
+    close(epfd);
     close(server_fd);
     return 0;
 }
