@@ -20,8 +20,8 @@ typedef struct Conn {
     int fd;
     char inbuf[BUF_SIZE];
     int inbuf_used;
-    char login_id[32];
-    int has_login_id;
+    char imei_id[32];
+    int has_imei_id;
     int timer_fd;              /**< Timer file descriptor for this connection */
     time_t last_activity;      /**< Timestamp of last activity */
     EventData *socket_event_data;  /**< Socket event data for cleanup */

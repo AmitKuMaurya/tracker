@@ -20,8 +20,8 @@ cJSON* create_lbs_json_object(void *c, const void *data) {
     }
     
     // Add device info
-    if (conn && conn->has_login_id) {
-        cJSON_AddStringToObject(json, "device_id", conn->login_id);
+    if (conn && conn->has_imei_id) {
+        cJSON_AddStringToObject(json, "device_id", conn->imei_id);
     }
     
     // Add datetime from packet
@@ -206,7 +206,7 @@ char* create_websocket_gps_message(const char *imei, const GPSData *gps_data) {
     cJSON_AddStringToObject(root, "type", "location");
     
     // Get device_id from IMEI (hide IMEI from client)
-    const char *device_id = hash_map_get_device_id_by_imei(imei);
+    const char *device_id = hash_map_get_device_id(imei);
     cJSON_AddStringToObject(root, "device_id", device_id ? device_id : imei);
     
     // Add timestamp
@@ -307,7 +307,7 @@ char* create_websocket_lbs_message(const char *imei, const LBSData *lbs_data) {
     cJSON_AddStringToObject(root, "type", "location");
     
     // Get device_id from IMEI (hide IMEI from client)
-    const char *device_id = hash_map_get_device_id_by_imei(imei);
+    const char *device_id = hash_map_get_device_id(imei);
     cJSON_AddStringToObject(root, "device_id", device_id ? device_id : imei);
     
     // Add timestamp

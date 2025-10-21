@@ -519,7 +519,7 @@ int websocket_send_to_device_id(const char *device_id, const char *data, size_t 
         return -1;
     }
     
-    // Convert device_id to IMEI for internal lookup
+    // Convert device_id to IMEI for internal look up do
     const char *imei = hash_map_get_imei_by_device_id(device_id);
     if (!imei) {
         printf("WebSocket: No IMEI found for device_id %s\n", device_id);

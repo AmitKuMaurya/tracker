@@ -109,7 +109,7 @@ int reset_connection_timer(Conn *c) {
     // Update last activity timestamp
     c->last_activity = time(NULL);
     
-    printf("TIMER: Reset timeout timer for connection imei=%s\n", c->login_id);
+    printf("TIMER: Reset timeout timer for connection imei=%s\n", c->imei_id);
     return 0;
 }
 
@@ -119,16 +119,16 @@ void handle_connection_timeout(int epfd, Conn *c) {
         return;
     }
     
-    printf("TIMER: Connection timeout - closing fd=%d (login_id: %s)\n", 
-           c->fd, c->has_login_id ? c->login_id : "unknown");
+    printf("TIMER: Connection timeout - closing fd=%d (imei_id: %s)\n", 
+           c->fd, c->has_imei_id ? c->imei_id : "unknown");
 
     char* device_status_msg = device_online_status_json(0);  // here 0 mean device is offline
     // Get device_id for this IMEI and send to device_id
-    const char *device_id = hash_map_get_device_id_by_imei(c->login_id);
+    const char *device_id = hash_map_get_device_id(c->imei_id);
     if (device_id) {
         websocket_send_to_device_id(device_id, device_status_msg, strlen(device_status_msg));
     } else {
-        websocket_send_to_imei_id(c->login_id, device_status_msg, strlen(device_status_msg));
+        websocket_send_to_imei_id(c->imei_id, device_status_msg, strlen(device_status_msg));
     }
     free(device_status_msg);
     
@@ -257,7 +257,7 @@ void handle_accept(int server_fd, int epfd) {
         c->fd = infd;
         c->timer_fd = -1;  // Will be set by create_connection_timer
         c->last_activity = time(NULL);
-        c->has_login_id = 0;
+        c->has_imei_id = 0;
         c->inbuf_used = 0;
         c->socket_event_data = NULL;
         c->timer_event_data = NULL;

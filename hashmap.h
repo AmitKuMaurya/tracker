@@ -123,9 +123,7 @@ const char* hash_map_get_imei_by_fd(int fd);
 // Fast connection status check by FD
 int hash_map_is_connection_online_by_fd(int fd);
 
-// IMEI to Device ID mapping functions
-const char* hash_map_get_device_id_by_imei(const char *imei);
-const char* hash_map_get_imei_by_device_id(const char *device_id);
+
 
 #define CONN_TYPE_TCP 1
 #define CONN_TYPE_WS  2

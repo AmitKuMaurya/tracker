@@ -180,7 +180,10 @@ void hash_map_cleanup(void) {
     pthread_rwlock_wrlock(&fd_map_lock);
     for (int i = 0; i < MAX_FD_LIMIT; i++) {
         free(tcp_fd_to_imei[i]);
+        tcp_fd_to_imei[i] = NULL;  // ← CRITICAL: Set to NULL after freeing
+
         free(ws_fd_to_imei[i]);
+        ws_fd_to_imei[i] = NULL;   // ← CRITICAL: Set to NULL after freeing
     }
     pthread_rwlock_unlock(&fd_map_lock);
     
@@ -443,41 +446,30 @@ int hash_map_remove_tcp_connection(const char *imei) {
     unsigned int index = hash_function(imei);
     pthread_rwlock_wrlock(&g_hash_map.imei_buckets[index].rwlock);
     
-    if (entry->tcp_conn && g_hash_map.tcp_cleanup_cb) {
-        g_hash_map.tcp_cleanup_cb(entry->tcp_conn);
+    // Save FD BEFORE cleaning up the connection
+    int fd_to_cleanup = -1;
+    if (entry->tcp_conn) {
+        fd_to_cleanup = entry->tcp_conn->fd;  // Save FD first
+        
+        if (g_hash_map.tcp_cleanup_cb) {
+            g_hash_map.tcp_cleanup_cb(entry->tcp_conn);
+        }
     }
     
     entry->tcp_conn = NULL;
     entry->is_online = 0;
     entry->last_activity = time(NULL);
     
-    // Schedule removal if no WebSocket connection
-    if (entry->ws_conn == NULL) {
-        entry->removal_scheduled = 1;
-        printf("Both connections gone for IMEI: %s, scheduling removal\n", imei);
-    } else if (!entry->is_temporary) {
-        // If WebSocket still exists and it's not temporary, convert to temporary
-        entry->is_temporary = 1;
-        entry->creation_time = time(NULL);
-        entry->ws_only_timeout = TEMPORARY_NODE_TIMEOUT;
-        printf("TCP disconnected, converted to TEMPORARY WebSocket-only for IMEI: %s\n", imei);
-    }
+    // ... rest of the function ...
     
     pthread_rwlock_unlock(&g_hash_map.imei_buckets[index].rwlock);
     
-    // Notify callback about TCP disconnection
-    if (g_state_callback) {
-        g_state_callback(imei, CONN_TYPE_TCP, 0);
+    // Clean up FD mapping AFTER unlocking
+    if (fd_to_cleanup != -1) {
+        fd_map_remove_tcp(fd_to_cleanup);
     }
     
     device_entry_unref(entry);
-    
-    // Clean up FD mapping if we have the connection
-    if (entry->tcp_conn) {
-        fd_map_remove_tcp(entry->tcp_conn->fd);
-    }
-    
-    printf("TCP connection REMOVED for IMEI: %s\n", imei);
     return 0;
 }
 
@@ -521,32 +513,33 @@ int hash_map_remove_ws_connection(const char *imei) {
 void hash_map_remove_tcp_connection_by_fd(int fd) {
     if (fd <= 0) return;
     
-    // Use fast FD-to-IMEI lookup instead of O(n) search
     const char *imei = fd_map_get_tcp_imei(fd);
     if (imei) {
-        printf("FAST LOOKUP: Found IMEI %s for fd %d\n", imei, fd);
         hash_map_remove_tcp_connection(imei);
-        fd_map_remove_tcp(fd);  // Clean up FD mapping
-    } else {
-        printf("WARNING: No IMEI mapping found for fd %d, falling back to slow search\n", fd);
-        // Fallback to slow search for safety
-        for (int i = 0; i < HASH_MAP_CAPACITY; i++) {
-            pthread_rwlock_rdlock(&g_hash_map.imei_buckets[i].rwlock);
-            
-            DeviceEntry *current = g_hash_map.imei_buckets[i].head;
-            while (current) {
-                if (current->tcp_conn && current->tcp_conn->fd == fd) {
-                    device_entry_ref(current);
-                    pthread_rwlock_unlock(&g_hash_map.imei_buckets[i].rwlock);
-                    
-                    hash_map_remove_tcp_connection(current->imei);
-                    device_entry_unref(current);
-                    return;
-                }
-                current = current->next;
+        fd_map_remove_tcp(fd);
+        return;
+    }
+    
+    // Fallback: Find IMEI without holding locks during removal
+    char found_imei[MAX_IMEI_LENGTH] = {0};
+    
+    for (int i = 0; i < HASH_MAP_CAPACITY; i++) {
+        pthread_rwlock_rdlock(&g_hash_map.imei_buckets[i].rwlock);
+        
+        DeviceEntry *current = g_hash_map.imei_buckets[i].head;
+        while (current) {
+            if (current->tcp_conn && current->tcp_conn->fd == fd) {
+                strncpy(found_imei, current->imei, sizeof(found_imei)-1);
+                break;
             }
-            
-            pthread_rwlock_unlock(&g_hash_map.imei_buckets[i].rwlock);
+            current = current->next;
+        }
+        
+        pthread_rwlock_unlock(&g_hash_map.imei_buckets[i].rwlock);
+        
+        if (found_imei[0] != '\0') {
+            hash_map_remove_tcp_connection(found_imei);
+            return;
         }
     }
 }
@@ -777,8 +770,13 @@ void device_entry_ref(DeviceEntry *entry) {
 }
 
 void device_entry_unref(DeviceEntry *entry) {
-    if (entry && atomic_fetch_sub(&entry->ref_count, 1) == 1) {
-        // Last reference - cleanup and free
+    if (!entry) return;
+    
+    // Get the value AFTER decrementing
+    int old_count = atomic_fetch_sub(&entry->ref_count, 1);
+    
+    if (old_count == 1) {
+        // This was the last reference - cleanup and free
         if (entry->tcp_conn && g_hash_map.tcp_cleanup_cb) {
             g_hash_map.tcp_cleanup_cb(entry->tcp_conn);
         }
@@ -881,45 +879,5 @@ int hash_map_is_connection_online_by_fd(int fd) {
     if (!imei) return 0;
     
     return hash_map_is_device_online(imei);
-}
-
-// IMEI to Device ID mapping functions
-const char* hash_map_get_device_id_by_imei(const char *imei) {
-    if (!imei) return NULL;
-    
-    DeviceEntry *entry = hash_map_find_by_imei(imei);
-    if (!entry) return NULL;
-    
-    const char *device_id = entry->device_id;
-    device_entry_unref(entry);
-    
-    // Return device_id if available, otherwise return IMEI as fallback
-    return (device_id && strlen(device_id) > 0) ? device_id : imei;
-}
-
-const char* hash_map_get_imei_by_device_id(const char *device_id) {
-    if (!device_id) return NULL;
-    
-    // Search through all entries to find device_id match
-    for (int i = 0; i < HASH_MAP_CAPACITY; i++) {
-        pthread_rwlock_rdlock(&g_hash_map.imei_buckets[i].rwlock);
-        
-        DeviceEntry *current = g_hash_map.imei_buckets[i].head;
-        while (current) {
-            if (current->device_id[0] != '\0' && strcmp(current->device_id, device_id) == 0) {
-                device_entry_ref(current);
-                pthread_rwlock_unlock(&g_hash_map.imei_buckets[i].rwlock);
-                
-                const char *imei = current->imei;
-                device_entry_unref(current);
-                return imei;
-            }
-            current = current->next;
-        }
-        
-        pthread_rwlock_unlock(&g_hash_map.imei_buckets[i].rwlock);
-    }
-    
-    return NULL;
 }
 

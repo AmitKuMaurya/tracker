@@ -203,7 +203,7 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
     const unsigned char *imei_bcd = cmd + 4;
     char imei[17]; // 16 digits + null terminator
     int digit_index = 0;
-    
+
     for (int i = 0; i < 8 && digit_index < 16; i++) {
         unsigned char byte = imei_bcd[i];
         unsigned char high = (byte >> 4) & 0x0F;
@@ -221,18 +221,18 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
     // Store last 15 digits of IMEI in connection structure
     int num_digits = digit_index;
     const char *last15 = (num_digits >= 15) ? (imei + (num_digits - 15)) : imei;
-    snprintf(c->login_id, sizeof(c->login_id), "%.15s", last15);
+    snprintf(c->imei_id, sizeof(c->imei_id), "%.15s", last15);
     // we will inform app to device status online
     char* device_status_msg = device_online_status_json(1);
     // Get device_id for this IMEI and send to device_id
-    const char *device_id = hash_map_get_device_id_by_imei(c->login_id);
+    const char *device_id = hash_map_get_device_id(c->imei_id);
     if (device_id) {
         websocket_send_to_device_id(device_id, device_status_msg, strlen(device_status_msg));
     } else {
-        websocket_send_to_imei_id(c->login_id, device_status_msg, strlen(device_status_msg));
+        websocket_send_to_imei_id(c->imei_id, device_status_msg, strlen(device_status_msg));
     }
     free(device_status_msg);
-    c->has_login_id = 1;
+    c->has_imei_id = 1;
 
     // we set status upload interval to 2 minutes (or your desired value)
     int status_upload_interval = 2; // set to 2 minutes, change as needed
@@ -249,19 +249,19 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
         printf("DATA_PROC: Failed to set location upload interval for fd=%d\n", c->fd);
     }
 
-    printf("DATA_PROC: Device login - IMEI: %s, fd: %d\n", c->login_id, c->fd);
+    printf("DATA_PROC: Device login - IMEI: %s, fd: %d\n", c->imei_id, c->fd);
     
     // Get device_id from database for this IMEI
-    const char *db_device_id = db_get_device_id(c->login_id);
+    const char *db_device_id = db_get_device_id(c->imei_id);
     if (db_device_id && strcmp(db_device_id, "device_id_not_found") != 0) {
-        printf("DATA_PROC: Found device_id %s for IMEI %s\n", db_device_id, c->login_id);
+        printf("DATA_PROC: Found device_id %s for IMEI %s\n", db_device_id, c->imei_id);
     } else {
-        printf("DATA_PROC: No device_id found for IMEI %s, using IMEI as device_id\n", c->login_id);
-        db_device_id = c->login_id;  // Fallback to IMEI
+        printf("DATA_PROC: No device_id found for IMEI %s, using IMEI as device_id\n", c->imei_id);
+        db_device_id = c->imei_id;  // Fallback to IMEI
     }
     
     // Register device in hashmap with device_id
-    hash_map_set_tcp_connection(c->login_id, db_device_id, c);
+    hash_map_set_tcp_connection(c->imei_id, db_device_id, c);
     
     // Send success response: 7878 01 01 0D0A
     unsigned char response[] = {0x78, 0x78, 0x01, 0x01, 0x0D, 0x0A};
@@ -282,7 +282,7 @@ void process_heartbeat_command(Conn *c, const unsigned char *cmd, int len) {
     }
     
     printf("DATA_PROC: Heartbeat from device %s (fd: %d)\n", 
-           c->has_login_id ? c->login_id : "unknown", c->fd);
+           c->has_imei_id ? c->imei_id : "unknown", c->fd);
 
     
     
@@ -369,12 +369,15 @@ void process_device_details_command(Conn *c, const unsigned char *cmd, int len) 
     printf("  - Signal Strength: %d\n", signal_strength);     // Will print: 64%
     
     char* device_details_msg = device_details_json(battery_level,status_upload_interval,signal_strength);
+    if (!device_details_msg) {
+        printf("DATA_PROC: Failed to create device details JSON message\n");
+        return;
+    }
+    
     // Get device_id for this IMEI and send to device_id
-    const char *device_id = hash_map_get_device_id_by_imei(c->login_id);
+    const char *device_id = hash_map_get_device_id(c->imei_id);
     if (device_id) {
         websocket_send_to_device_id(device_id, device_details_msg, strlen(device_details_msg));
-    } else {
-        websocket_send_to_imei_id(c->login_id, device_details_msg, strlen(device_details_msg));
     }
     free(device_details_msg);
 
