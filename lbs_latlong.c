@@ -143,8 +143,7 @@ int lbs_query_google(LBSData *data) {
     
     if (result != 0) {
         // If we failed, clean up the location structure
-        free(data->location);
-        data->location = NULL;
+        printf("LBS_GOOGLE: Cleaning up location data due to failure\n");
     }
     
     return result;
