@@ -138,7 +138,6 @@ static void *websocket_server_thread(void *arg) {
                 continue;
             }
             perror("WebSocket epoll_wait");
-            // On fatal epoll_wait error, break loop so server can stop/cleanup
             break;
         }
         
@@ -187,7 +186,7 @@ static void *websocket_server_thread(void *arg) {
                     }
                 }
                 
-                if (events[i].events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
+                if (events[i].events & (EPOLLERR | EPOLLHUP)) {
                     printf("WebSocket: Error or hangup on fd=%d\n", fd);
                     remove_websocket_connection(fd);
                 }
@@ -235,7 +234,6 @@ static int accept_websocket_connection(int server_fd) {
     // Initialize connection
     g_ws_connections[slot].fd = fd;
     g_ws_connections[slot].state = WS_STATE_HANDSHAKE;
-    g_ws_connections[slot].cleanup_in_progress = 0;
     g_ws_connections[slot].has_imei = 0;
     g_ws_connections[slot].imei[0] = '\0';
     g_ws_connections[slot].has_device_id = 0;
@@ -685,66 +683,41 @@ static int base64_encode(const unsigned char *input, size_t input_len, char *out
 
 static void remove_websocket_connection(int fd) {
     pthread_mutex_lock(&g_ws_connections_mutex);
-    // Mark cleanup_in_progress under lock and capture any data needed
-    int do_cleanup = 1;
-    for (int i = 0; i < MAX_WS_CONNECTIONS; i++) {
-        if (g_ws_connections[i].fd == fd) {
-            if (g_ws_connections[i].cleanup_in_progress) {
-                do_cleanup = 0;
-            } else {
-                g_ws_connections[i].cleanup_in_progress = 1;
-            }
-            break;
-        }
-    }
+    cleanup_websocket_connection(fd);
     pthread_mutex_unlock(&g_ws_connections_mutex);
-
-    if (do_cleanup) {
-        cleanup_websocket_connection(fd);
-    }
 }
 
 static void cleanup_websocket_connection(int fd) {
-    // First, capture data we need while holding the mutex, but do not call out while holding it
-    char imei_copy[32] = {0};
-    int had_imei = 0;
-    int index = -1;
-
-    pthread_mutex_lock(&g_ws_connections_mutex);
+    char imei_to_cleanup[MAX_IMEI_LENGTH] = {0};
+    int has_imei_to_cleanup = 0;
+    
     for (int i = 0; i < MAX_WS_CONNECTIONS; i++) {
         if (g_ws_connections[i].fd == fd) {
-            index = i;
             if (g_ws_connections[i].has_imei) {
-                strncpy(imei_copy, g_ws_connections[i].imei, sizeof(imei_copy) - 1);
-                imei_copy[sizeof(imei_copy) - 1] = '\0';
-                had_imei = 1;
+                strcpy(imei_to_cleanup, g_ws_connections[i].imei);
+                has_imei_to_cleanup = 1;
             }
+            
+            epoll_ctl(g_ws_server.epoll_fd, EPOLL_CTL_DEL, fd, NULL);
+            close(fd);
+            
+            if (g_ws_connections[i].write_buf) {
+                free(g_ws_connections[i].write_buf);
+            }
+            
+            memset(&g_ws_connections[i], 0, sizeof(WSConnection));
+            g_ws_connections[i].fd = -1;
             break;
         }
     }
-    pthread_mutex_unlock(&g_ws_connections_mutex);
-
-    // Perform hashmap operations outside the mutex to avoid deadlocks
-    if (had_imei) {
-        hash_map_remove_ws_connection(imei_copy);
+    
+    // Remove from hashmap OUTSIDE the mutex
+    if (has_imei_to_cleanup) {
+        hash_map_remove_ws_connection(imei_to_cleanup);
         fd_map_remove_ws(fd);
     }
-
-    // Proceed with epoll and fd cleanup
-    epoll_ctl(g_ws_server.epoll_fd, EPOLL_CTL_DEL, fd, NULL);
-    close(fd);
-
-    // Now free buffers and reset the slot under the mutex again
-    pthread_mutex_lock(&g_ws_connections_mutex);
-    if (index != -1 && g_ws_connections[index].fd == fd) {
-        if (g_ws_connections[index].write_buf) {
-            free(g_ws_connections[index].write_buf);
-        }
-        memset(&g_ws_connections[index], 0, sizeof(WSConnection));
-        g_ws_connections[index].fd = -1;
-    }
-    pthread_mutex_unlock(&g_ws_connections_mutex);
 }
+
 
 static int make_socket_non_blocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);

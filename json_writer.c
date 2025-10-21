@@ -331,7 +331,7 @@ char* create_websocket_lbs_message(const char *imei, const LBSData *lbs_data) {
     
     char *json_string = cJSON_Print(root);
     cJSON_Delete(root);
-    
+    printf("LBS WebSocket JSON: %s\n", json_string);
     return json_string;
 }
 
