@@ -6,7 +6,7 @@ cat > .gitignore << 'EOF'
 
 # common build folders
 obj/
-
+.git/*
 
 # logs and temporary
 *.log

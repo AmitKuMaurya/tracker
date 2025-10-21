@@ -321,6 +321,13 @@ void handle_timer_event(int epfd, Conn *c) {
     handle_connection_timeout(epfd, c);
 }
 
+void tcp_connection_cleanup(Conn *conn) {
+    if (conn) {
+        printf("TCP cleanup callback for fd=%d\n", conn->fd);
+        // Don't free conn here - hashmap handles the lifecycle
+    }
+}
+
 int main() {
     if(db_init() != 0) {
         fprintf(stderr, "Failed to initialize database connection\n");
@@ -335,6 +342,7 @@ int main() {
     } else {
         printf("Hashmap initialized successfully\n");
     }
+    hash_map_set_cleanup_callbacks(tcp_connection_cleanup, NULL);
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd == -1) {
         perror("socket");
