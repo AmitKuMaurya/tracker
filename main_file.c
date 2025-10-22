@@ -118,8 +118,6 @@ void handle_connection_timeout(int epfd, Conn *c) {
     const char *device_id = hash_map_get_device_id(c->imei_id);
     if (device_id) {
         websocket_send_to_device_id(device_id, device_status_msg, strlen(device_status_msg));
-    } else {
-        websocket_send_to_imei_id(c->imei_id, device_status_msg, strlen(device_status_msg));
     }
     free(device_status_msg);
     
@@ -382,6 +380,7 @@ int main() {
     cleanup_event.events = EPOLLIN;
     if (epoll_ctl(epfd, EPOLL_CTL_ADD, g_cleanup_timer_fd, &cleanup_event) == -1) {
         perror("epoll_ctl: cleanup timer");
+        free(cleanup_event_data);
         exit(EXIT_FAILURE);
     }
 
@@ -449,10 +448,15 @@ int main() {
     }
 
     // Cleanup on exit
+    epoll_ctl(epfd, EPOLL_CTL_DEL, g_cleanup_timer_fd, NULL);
     free(events);
     close(g_cleanup_timer_fd);
     close(epfd);
     close(server_fd);
     hash_map_cleanup();
+    free(cleanup_event_data);
+    websocket_server_stop(); // Stop WebSocket server
+    hash_map_cleanup();
+    db_cleanup(); // Clean up database
     return 0;
 }

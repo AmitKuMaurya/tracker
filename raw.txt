@@ -1,146 +1,519 @@
-// Add this function prototype near the other function prototypes
-void gps_command(Conn *c, const unsigned char *cmd, int len);
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <arpa/inet.h>
+#include <sys/epoll.h>
+#include <sys/socket.h>
+#include <sys/timerfd.h>
+#include <time.h>
+#include <stdint.h>
+#include <signal.h>
+#include "conn.h"
+#include "hashmap.h"
+#include "data_processing.h"
+#include "websocket_server.h"
+#include "database.h"
 
-// Update the command_action function to call gps_command for protocol 0x10
-void command_action(Conn *c, const char *cmd, int len) {
-    printf("command_action: got frame of %d bytes: ", len);
-    for (int i = 0; i < len; i++)
-        printf("%02X ", (unsigned char)cmd[i]);
-    printf("\n");
+#define PORT 8081
+#define MAX_EVENTS 10000
+#define BUF_SIZE 4096
+#define EVENT_TYPE_CLEANUP 3
+
+static int g_cleanup_timer_fd = -1;
+static volatile sig_atomic_t g_shutdown = 0; // Signal handler flag
+
+// Signal handler for graceful shutdown
+static void signal_handler(int sig) {
+    (void)sig;
+    g_shutdown = 1;
+}
+
+int make_socket_non_blocking(int fd) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags == -1) return -1;
+    return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
+int create_connection_timer(int epfd, Conn *c) {
+    if (!c) {
+        fprintf(stderr, "Invalid connection for timer creation\n");
+        return -1;
+    }
     
-    if (len > 4) {
-        unsigned char proto = (unsigned char)cmd[3];
-        if (proto == 0x01) {
-            printf("login command received\n");
-            login_command(c, (const unsigned char *)cmd, len);
-        } else if (proto == 0x08) {
-            printf("heartbeat command received\n");
-        } else if (proto == 0x10) {
-            printf("GPS online command received\n");
-            gps_command(c, (const unsigned char *)cmd, len);
+    c->timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    if (c->timer_fd == -1) {
+        perror("timerfd_create");
+        return -1;
+    }
+    
+    struct itimerspec timer_spec = {0};
+    timer_spec.it_value.tv_sec = TIMEOUT_SECONDS;
+    timer_spec.it_value.tv_nsec = 0;
+    timer_spec.it_interval.tv_sec = 0;
+    timer_spec.it_interval.tv_nsec = 0;
+    
+    if (timerfd_settime(c->timer_fd, 0, &timer_spec, NULL) == -1) {
+        perror("timerfd_settime");
+        close(c->timer_fd);
+        c->timer_fd = -1;
+        return -1;
+    }
+    
+    EventData *timer_event_data = malloc(sizeof(EventData));
+    if (!timer_event_data) {
+        fprintf(stderr, "Failed to allocate timer event data\n");
+        close(c->timer_fd);
+        c->timer_fd = -1;
+        return -1;
+    }
+    timer_event_data->conn = c;
+    timer_event_data->event_type = EVENT_TYPE_TIMER;
+    c->timer_event_data = timer_event_data;
+    
+    struct epoll_event timer_event;
+    timer_event.data.ptr = timer_event_data;
+    timer_event.events = EPOLLIN | EPOLLET;
+    
+    if (epoll_ctl(epfd, EPOLL_CTL_ADD, c->timer_fd, &timer_event) == -1) {
+        perror("epoll_ctl: add timer");
+        close(c->timer_fd);
+        free(timer_event_data);
+        c->timer_fd = -1;
+        c->timer_event_data = NULL;
+        return -1;
+    }
+    
+    c->last_activity = time(NULL);
+    printf("TIMER: Created timeout timer for connection fd=%d (timer_fd=%d)\n", c->fd, c->timer_fd);
+    return 0;
+}
+
+int reset_connection_timer(Conn *c) {
+    if (!c || c->timer_fd == -1) {
+        return -1;
+    }
+    
+    struct itimerspec timer_spec = {0};
+    timer_spec.it_value.tv_sec = TIMEOUT_SECONDS;
+    timer_spec.it_value.tv_nsec = 0;
+    timer_spec.it_interval.tv_sec = 0;
+    timer_spec.it_interval.tv_nsec = 0;
+    
+    if (timerfd_settime(c->timer_fd, 0, &timer_spec, NULL) == -1) {
+        perror("timerfd_settime reset");
+        return -1;
+    }
+    
+    c->last_activity = time(NULL);
+    printf("TIMER: Reset timeout timer for connection imei=%s\n", c->imei_id);
+    return 0;
+}
+
+void handle_connection_timeout(int epfd, Conn *c) {
+    if (!c) return;
+    
+    printf("TIMER: Connection timeout - closing fd=%d (imei_id: %s)\n", 
+           c->fd, c->has_imei_id ? c->imei_id : "unknown");
+
+    char* device_status_msg = device_online_status_json(0);
+    if (device_status_msg) {
+        const char *device_id = hash_map_get_device_id(c->imei_id);
+        if (device_id) {
+            if (websocket_send_to_device_id(device_id, device_status_msg, strlen(device_status_msg)) == -1) {
+                fprintf(stderr, "Failed to send device status for imei=%s\n", c->imei_id);
+            }
+        }
+        free(device_status_msg);
+    }
+    
+    hash_map_remove_tcp_connection_by_fd(c->fd);
+    
+    if (c->timer_fd != -1) {
+        if (epoll_ctl(epfd, EPOLL_CTL_DEL, c->timer_fd, NULL) == -1) {
+            perror("epoll_ctl: del timer");
+        }
+        close(c->timer_fd);
+        c->timer_fd = -1;
+    }
+    
+    if (c->fd != -1) {
+        if (epoll_ctl(epfd, EPOLL_CTL_DEL, c->fd, NULL) == -1) {
+            perror("epoll_ctl: del socket");
+        }
+        close(c->fd);
+        c->fd = -1;
+    }
+    
+    free(c);
+    printf("TIMER: Connection cleanup completed\n");
+}
+
+void cleanup_connection(int epfd, Conn *c) {
+    if (!c) return;
+    
+    printf("CLEANUP: Cleaning up connection fd=%d\n", c->fd);
+    
+    hash_map_remove_tcp_connection_by_fd(c->fd);
+    
+    if (c->timer_fd != -1) {
+        if (epoll_ctl(epfd, EPOLL_CTL_DEL, c->timer_fd, NULL) == -1) {
+            perror("epoll_ctl: del timer");
+        }
+        close(c->timer_fd);
+        c->timer_fd = -1;
+    }
+    if (c->timer_event_data) {
+        free(c->timer_event_data);
+        c->timer_event_data = NULL;
+    }
+    
+    if (c->fd != -1) {
+        if (epoll_ctl(epfd, EPOLL_CTL_DEL, c->fd, NULL) == -1) {
+            perror("epoll_ctl: del socket");
+        }
+        close(c->fd);
+        c->fd = -1;
+    }
+    if (c->socket_event_data) {
+        free(c->socket_event_data);
+        c->socket_event_data = NULL;
+    }
+    
+    free(c);
+}
+
+void handle_read(int epfd, Conn *c) {
+    if (!c || c->fd == -1) return;
+    
+    while (1) {
+        ssize_t count = recv(c->fd, c->inbuf + c->inbuf_used,
+                             BUF_SIZE - c->inbuf_used, 0);
+        if (count == -1) {
+            if (errno != EAGAIN) {
+                perror("recv");
+                fprintf(stderr, "Closing connection fd=%d due to recv error\n", c->fd);
+                cleanup_connection(epfd, c);
+                return;
+            }
+            break;
+        } else if (count == 0) {
+            printf("CLIENT: Connection closed by client fd=%d\n", c->fd);
+            cleanup_connection(epfd, c);
+            return;
+        } else {
+            reset_connection_timer(c);
+            
+            c->inbuf_used += count;
+            if (c->inbuf_used >= BUF_SIZE) {
+                fprintf(stderr, "BUFFER: Buffer overflow, dropping data for fd=%d\n", c->fd);
+                c->inbuf_used = 0;
+            }
+            
+            printf("DATA: Received %zd bytes from fd=%d\n", count, c->fd);
+            process_input_buffer(c);
         }
     }
 }
 
-// GPS command parser function
-void gps_command(Conn *c, const unsigned char *cmd, int len) {
-    // Minimum length check: 78 78 + len(1) + proto(1) + datetime(6) + gps_info(1) + lat_long(8) + speed(1) + status_heading(2) + terminator(2)
-    if (len < 24) {
-        printf("GPS command too short: %d bytes\n", len);
-        return;
-    }
-    
-    // Extract status and heading bytes (position depends on protocol version)
-    // For basic 0x10 protocol, status/heading is at position: 2(header) + 1(len) + 1(proto) + 6(datetime) + 1(gps_info) + 8(lat_long) + 1(speed) = 20
-    int status_pos = 20;
-    if (status_pos + 1 >= len) {
-        printf("Invalid GPS command length for status extraction\n");
-        return;
-    }
-    
-    unsigned char status_byte1 = cmd[status_pos];
-    unsigned char status_byte2 = cmd[status_pos + 1];
-    
-    // Check if GPS is positioned (bit 4 of first status byte)
-    // According to protocol: bit 4 (0-indexed from left) indicates GPS positioning status
-    // 0 = GPS not positioned, 1 = GPS positioned
-    int is_positioned = (status_byte1 & 0x08) != 0; // Mask with 00001000 (bit 3 from right)
-    
-    if (!is_positioned) {
-        printf("GPS not positioned, skipping data processing\n");
+void handle_accept(int server_fd, int epfd) {
+    while (1) { 
+        struct sockaddr_in in_addr;
+        socklen_t in_len = sizeof(in_addr);
+        int infd = accept(server_fd, (struct sockaddr *)&in_addr, &in_len);
+        if (infd == -1) {
+            if ((errno == EAGAIN) || (errno == EWOULDBLOCK)) break;
+            perror("accept");
+            break;
+        }
+
+        if (make_socket_non_blocking(infd) == -1) {
+            perror("make_socket_non_blocking");
+            close(infd);
+            continue;
+        }
+
+        Conn *c = calloc(1, sizeof(Conn));
+        if (!c) {
+            fprintf(stderr, "calloc failed for Conn\n");
+            close(infd);
+            continue;
+        }
         
-        // Still need to reply to the device as required by protocol
-        unsigned char response[] = {0x78, 0x78, 0x00, 0x10, 
-                                   cmd[4], cmd[5], cmd[6], cmd[7], cmd[8], cmd[9], // Copy datetime
-                                   0x0D, 0x0A};
-        send(c->fd, response, sizeof(response), 0);
+        c->fd = infd;
+        c->timer_fd = -1;
+        c->last_activity = time(NULL);
+        c->has_imei_id = 0;
+        c->inbuf_used = 0;
+        c->socket_event_data = NULL;
+        c->timer_event_data = NULL;
+
+        EventData *socket_event_data = malloc(sizeof(EventData));
+        if (!socket_event_data) {
+            fprintf(stderr, "Failed to allocate socket event data\n");
+            free(c);
+            close(infd);
+            continue;
+        }
+        socket_event_data->conn = c;
+        socket_event_data->event_type = EVENT_TYPE_SOCKET;
+        c->socket_event_data = socket_event_data;
+        
+        struct epoll_event event;
+        event.data.ptr = socket_event_data;
+        event.events = EPOLLIN | EPOLLET;
+        if (epoll_ctl(epfd, EPOLL_CTL_ADD, infd, &event) == -1) {
+            perror("epoll_ctl: add socket");
+            free(socket_event_data);
+            free(c);
+            close(infd);
+            continue;
+        }
+        
+        if (create_connection_timer(epfd, c) == -1) {
+            fprintf(stderr, "Failed to create timer for connection fd=%d\n", infd);
+            epoll_ctl(epfd, EPOLL_CTL_DEL, infd, NULL);
+            free(socket_event_data);
+            free(c);
+            close(infd);
+            continue;
+        }
+
+        printf("ACCEPT: New connection fd=%d with timer_fd=%d\n", infd, c->timer_fd);
+    }
+}
+
+void handle_timer_event(int epfd, Conn *c) {
+    if (!c || c->timer_fd == -1) return;
+    
+    uint64_t timer_data;
+    ssize_t bytes_read = read(c->timer_fd, &timer_data, sizeof(timer_data));
+    if (bytes_read != sizeof(timer_data)) {
+        if (bytes_read == -1 && errno != EAGAIN) {
+            perror("read timer");
+            handle_connection_timeout(epfd, c); // Ensure cleanup on error
+        }
         return;
     }
     
-    printf("GPS is positioned, processing data...\n");
-    
-    // Parse datetime (BCD encoded)
-    // Position: 4-9 (after 78 78 len proto)
-    int year = (cmd[4] >> 4) * 10 + (cmd[4] & 0x0F) + 2000;
-    int month = (cmd[5] >> 4) * 10 + (cmd[5] & 0x0F);
-    int day = (cmd[6] >> 4) * 10 + (cmd[6] & 0x0F);
-    int hour = (cmd[7] >> 4) * 10 + (cmd[7] & 0x0F);
-    int minute = (cmd[8] >> 4) * 10 + (cmd[8] & 0x0F);
-    int second = (cmd[9] >> 4) * 10 + (cmd[9] & 0x0F);
-    
-    printf("DateTime: %04d-%02d-%02d %02d:%02d:%02d (GMT+0)\n", 
-           year, month, day, hour, minute, second);
-    
-    // Parse latitude and longitude (positions 11-18)
-    // GPS info byte at position 10 contains length and satellite count
-    unsigned char gps_info = cmd[10];
-    int gps_data_length = (gps_info >> 4) & 0x0F;
-    int satellite_count = gps_info & 0x0F;
-    printf("GPS data length: %d, Satellites: %d\n", gps_data_length, satellite_count);
-    
-    // Extract latitude (4 bytes) and longitude (4 bytes)
-    uint32_t latitude_raw = (cmd[11] << 24) | (cmd[12] << 16) | (cmd[13] << 8) | cmd[14];
-    uint32_t longitude_raw = (cmd[15] << 24) | (cmd[16] << 16) | (cmd[17] << 8) | cmd[18];
-    
-    // Convert to degrees (divide by 30000 to get minutes, then convert to degrees)
-    double latitude_minutes = latitude_raw / 30000.0;
-    double longitude_minutes = longitude_raw / 30000.0;
-    
-    double latitude_degrees = floor(latitude_minutes / 60.0);
-    double latitude_decimal = latitude_degrees + (latitude_minutes - (latitude_degrees * 60.0)) / 60.0;
-    
-    double longitude_degrees = floor(longitude_minutes / 60.0);
-    double longitude_decimal = longitude_degrees + (longitude_minutes - (longitude_degrees * 60.0)) / 60.0;
-    
-    // Check direction from status byte
-    int is_north = (status_byte1 & 0x04) != 0; // Bit 5: 0=South, 1=North
-    int is_west = (status_byte1 & 0x02) != 0;   // Bit 6: 0=East, 1=West
-    
-    if (!is_north) {
-        latitude_decimal = -latitude_decimal; // South latitude is negative
+    printf("TIMER: Timer expired for connection fd=%d (timer_fd=%d)\n", c->fd, c->timer_fd);
+    handle_connection_timeout(epfd, c);
+}
+
+void tcp_connection_cleanup(Conn *conn) {
+    if (conn) {
+        printf("TCP cleanup callback for fd=%d\n", conn->fd);
     }
-    if (is_west) {
-        longitude_decimal = -longitude_decimal; // West longitude is negative
+}
+
+int main() {
+    // Set up signal handlers for graceful shutdown
+    struct sigaction sa = {0};
+    sa.sa_handler = signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
+
+    if (db_init() != 0) {
+        fprintf(stderr, "Failed to initialize database connection\n");
+    } else {
+        printf("Database initialized successfully\n");
     }
     
-    printf("Latitude: %.6f %s\n", latitude_decimal, is_north ? "N" : "S");
-    printf("Longitude: %.6f %s\n", longitude_decimal, is_west ? "W" : "E");
+    if (hash_map_init() != 0) {
+        fprintf(stderr, "Failed to initialize hashmap\n");
+        exit(EXIT_FAILURE);
+    } else {
+        printf("Hashmap initialized successfully\n");
+    }
+    hash_map_set_cleanup_callbacks(tcp_connection_cleanup, NULL);
     
-    // Parse speed (1 byte)
-    unsigned char speed_kmh = cmd[19];
-    printf("Speed: %d km/h\n", speed_kmh);
+    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd == -1) {
+        perror("socket");
+        exit(EXIT_FAILURE);
+    }
+
+    int opt = 1;
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1) {
+        perror("setsockopt");
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    struct sockaddr_in addr;
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(PORT);
+
+    if (bind(server_fd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
+        perror("bind");
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    if (listen(server_fd, SOMAXCONN) == -1) {
+        perror("listen");
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Server listening on 0.0.0.0:%d\n", PORT);
+
+    if (websocket_server_init() == 0) {
+        websocket_server_start();
+        printf("WebSocket server started on port %d\n", WS_PORT);
+    } else {
+        printf("Failed to initialize WebSocket server\n");
+    }
+
+    if (make_socket_non_blocking(server_fd) == -1) {
+        perror("make_socket_non_blocking");
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    int epfd = epoll_create1(0);
+    if (epfd == -1) {
+        perror("epoll_create1");
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    struct epoll_event event;
+    event.data.fd = server_fd;
+    event.events = EPOLLIN | EPOLLET;
+    if (epoll_ctl(epfd, EPOLL_CTL_ADD, server_fd, &event) == -1) {
+        perror("epoll_ctl: listen_sock");
+        close(epfd);
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    g_cleanup_timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
+    if (g_cleanup_timer_fd == -1) {
+        perror("timerfd_create cleanup");
+        close(epfd);
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
     
-    // Parse heading (from status bytes)
-    // Heading is stored in the last 10 bits of the two status bytes
-    int heading = ((status_byte1 & 0x03) << 8) | status_byte2;
-    printf("Heading: %d degrees\n", heading);
-    
-    // Check for altitude and alarm in extended protocol (V1.2+)
-    if (len >= 27) { // Check if we have extended data
-        // Altitude is 2 bytes at position 22-23
-        int16_t altitude = (cmd[22] << 8) | cmd[23];
-        printf("Altitude: %d meters\n", altitude);
+    struct itimerspec cleanup_spec = {0};
+    cleanup_spec.it_value.tv_sec = 30;
+    cleanup_spec.it_interval.tv_sec = 30;
+    if (timerfd_settime(g_cleanup_timer_fd, 0, &cleanup_spec, NULL) == -1) {
+        perror("timerfd_settime cleanup");
+        close(g_cleanup_timer_fd);
+        close(epfd);
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    EventData *cleanup_event_data = malloc(sizeof(EventData));
+    if (!cleanup_event_data) {
+        fprintf(stderr, "Failed to allocate cleanup event data\n");
+        close(g_cleanup_timer_fd);
+        close(epfd);
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+    cleanup_event_data->conn = NULL;
+    cleanup_event_data->event_type = EVENT_TYPE_CLEANUP;
+
+    struct epoll_event cleanup_event;
+    cleanup_event.data.ptr = cleanup_event_data;
+    cleanup_event.events = EPOLLIN;
+    if (epoll_ctl(epfd, EPOLL_CTL_ADD, g_cleanup_timer_fd, &cleanup_event) == -1) {
+        perror("epoll_ctl: cleanup timer");
+        free(cleanup_event_data);
+        close(g_cleanup_timer_fd);
+        close(epfd);
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Cleanup timer initialized (30 second intervals)\n");
+
+    struct epoll_event *events = calloc(MAX_EVENTS, sizeof(struct epoll_event));
+    if (!events) {
+        perror("calloc events");
+        free(cleanup_event_data);
+        close(g_cleanup_timer_fd);
+        close(epfd);
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    while (!g_shutdown) {
+        int n = epoll_wait(epfd, events, MAX_EVENTS, -1);
+        if (n == -1) {
+            if (errno == EINTR) continue;
+            perror("epoll_wait");
+            break;
+        }
         
-        // Alarm byte at position 24
-        if (len >= 25) {
-            unsigned char alarm_byte = cmd[24];
-            printf("Alarm status: 0x%02X\n", alarm_byte);
-            
-            if (alarm_byte & 0x01) printf("  - Vibration alarm\n");
-            if (alarm_byte & 0x02) printf("  - Speeding alarm\n");
-            if (alarm_byte & 0x04) printf("  - WiFi attendance alarm\n");
-            if (alarm_byte & 0x08) printf("  - Leave WiFi attendance alarm\n");
-            if (alarm_byte & 0x10) printf("  - Low power alarm\n");
-            if (alarm_byte & 0x20) printf("  - On duty alarm\n");
-            if (alarm_byte & 0x40) printf("  - Off duty alarm\n");
+        for (int i = 0; i < n; i++) {
+            if (events[i].data.fd == server_fd) {
+                handle_accept(server_fd, epfd);
+            } else {
+                EventData *event_data = (EventData *)events[i].data.ptr;
+                if (!event_data) {
+                    fprintf(stderr, "EPOLL: Invalid event data (NULL pointer)\n");
+                    continue;
+                }
+                
+                if (event_data->event_type == EVENT_TYPE_CLEANUP) {
+                    uint64_t expirations;
+                    ssize_t bytes_read = read(g_cleanup_timer_fd, &expirations, sizeof(expirations));
+                    if (bytes_read != sizeof(expirations)) {
+                        if (bytes_read == -1 && errno != EAGAIN) {
+                            perror("read cleanup timer");
+                        }
+                        continue;
+                    }
+                    printf("CLEANUP: Running scheduled removal cleanup (triggered %llu time(s))\n", 
+                           (unsigned long long)expirations);
+                    hash_map_cleanup_scheduled_removals();
+                    hash_map_print_stats();
+                    continue;
+                }
+                
+                Conn *c = event_data->conn;
+                if (!c) {
+                    fprintf(stderr, "EPOLL: Connection event with NULL conn pointer\n");
+                    continue;
+                }
+                
+                if (event_data->event_type == EVENT_TYPE_SOCKET) {
+                    if (events[i].events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
+                        cleanup_connection(epfd, c);
+                        continue;
+                    }
+                    handle_read(epfd, c);
+                } else if (event_data->event_type == EVENT_TYPE_TIMER) {
+                    handle_timer_event(epfd, c);
+                } else {
+                    fprintf(stderr, "EPOLL: Unknown event type: %d\n", event_data->event_type);
+                }
+            }
         }
     }
-    
-    // Reply to device as required by protocol
-    unsigned char response[] = {0x78, 0x78, 0x00, 0x10, 
-                               cmd[4], cmd[5], cmd[6], cmd[7], cmd[8], cmd[9], // Copy datetime
-                               0x0D, 0x0A};
-    send(c->fd, response, sizeof(response), 0);
-    
-    printf("GPS data processed and reply sent\n");
+
+    // Cleanup on exit
+    if (epoll_ctl(epfd, EPOLL_CTL_DEL, g_cleanup_timer_fd, NULL) == -1) {
+        perror("epoll_ctl: del cleanup timer");
+    }
+    free(events);
+    close(g_cleanup_timer_fd);
+    close(epfd);
+    close(server_fd);
+    websocket_server_stop(); // Stop WebSocket server
+    hash_map_cleanup();
+    db_cleanup(); // Clean up database
+    free(cleanup_event_data);
+    return 0;
 }
