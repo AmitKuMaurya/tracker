@@ -376,20 +376,33 @@ int write_lbs_json(Conn *c, const LBSData *data) {
  * @param data LBS data structure to clean up
  */
 void cleanup_lbs_data(LBSData *data) {
-    if (data) {
-        if (data->unique_cells) {
-            free(data->unique_cells);
-            data->unique_cells = NULL;
-        }
-        if (data->unique_wifis) {
-            free(data->unique_wifis);
-            data->unique_wifis = NULL;
-        }
-        if (data->location) {
-            free(data->location);
-            data->location = NULL;
-        }
+    if (!data) return;
+
+    // Free unique cell tower array
+    // CellInfo has no nested pointers (all primitive types)
+    if (data->unique_cells) {
+        free(data->unique_cells);
+        data->unique_cells = NULL;
+        data->unique_lbs_count = 0;  // Reset count for safety
     }
+
+    // Free unique WiFi access point array
+    // WiFiInfo has no nested pointers (mac is fixed array)
+    if (data->unique_wifis) {
+        free(data->unique_wifis);
+        data->unique_wifis = NULL;
+        data->unique_wifi_count = 0;  // Reset count for safety
+    }
+
+    // Free location data
+    // LocationData has no nested pointers (all primitive types)
+    if (data->location) {
+        free(data->location);
+        data->location = NULL;
+    }
+
+    // Note: All other fields in LBSData are primitive types (int, unsigned char)
+    // They don't need explicit freeing
 }
 
 /**
@@ -411,7 +424,7 @@ int send_lbs_device_response(Conn *c, const unsigned char *cmd) {
         0x0D, 0x0A
     };
     
-    ssize_t bytes_sent = send(c->fd, response, sizeof(response), 0);
+    ssize_t bytes_sent = send(c->fd, response, sizeof(response), 0); //here we sending response to device
     if (bytes_sent != sizeof(response)) {
         printf("%s Warning: Failed to send complete response (%zd/%zu bytes)\n", 
                LOG_PREFIX, bytes_sent, sizeof(response));
@@ -438,21 +451,28 @@ void lbs_command(Conn *c, const unsigned char *cmd, int len) {
     
     // Validate command
     if (validate_command_length(cmd, len) != 0) {
+        printf("%s LBS command validation failed\n", LOG_PREFIX);
+        cleanup_lbs_data(&data);
         return;
     }
     
     // Parse WiFi data
     if (parse_wifi_data(cmd, len, &data) != 0) {
+        printf("%s LBS WiFi data parsing failed\n", LOG_PREFIX);
+        cleanup_lbs_data(&data);
         return;
     }
     
     // Parse datetime
     if (parse_datetime(cmd, &data) != 0) {
+        printf("%s LBS datetime parsing failed\n", LOG_PREFIX);
+        cleanup_lbs_data(&data);
         return;
     }
     
     // Parse LBS data
     if (parse_lbs_data(cmd, len, &data) != 0) {
+        printf("%s LBS base station data parsing failed\n", LOG_PREFIX);
         cleanup_lbs_data(&data);
         return;
     }

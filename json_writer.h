@@ -74,8 +74,8 @@ char* create_websocket_gps_message(const char *imei, const GPSData *gps_data);
  * @param is_online 1 if device is online, 0 if offline
  * @return JSON string for WebSocket message (must be freed by caller) or NULL on error
  */
-char* device_online_status_json(int is_online);
+char* device_online_status_json(int is_online, const char* imei, const char* device_id);
 
-char* device_details_json(int battery,int upload_interval,int signal_strength);
+char* device_details_json(int battery,int upload_interval,int signal_strength,const char* imei);
 
 #endif // JSON_WRITER_H

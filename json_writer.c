@@ -336,27 +336,96 @@ char* create_websocket_lbs_message(const char *imei, const LBSData *lbs_data) {
     return json_string;
 }
 
-char* device_online_status_json(int is_online){
-    cJSON *root = cJSON_CreateObject();
-    if (!root) {
+char* device_online_status_json(int is_online, const char* imei, const char* device_id) {
+    // Input validation
+    if (!imei && !device_id) {
+        printf("JSON_WRITER: Both IMEI and device_id are NULL\n");
         return NULL;
     }
-
-    cJSON_AddStringToObject(root, "type", "device_status");
-    cJSON_AddNumberToObject(root, "status", is_online);
     
+    // Check for empty strings (with NULL safety)
+    int has_imei = (imei && strlen(imei) > 0);
+    int has_device_id = (device_id && strlen(device_id) > 0);
+    
+    if (!has_imei && !has_device_id) {
+        printf("JSON_WRITER: Both IMEI and device_id are empty\n");
+        return NULL;
+    }
+    
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        printf("JSON_WRITER: Failed to create JSON object\n");
+        return NULL;
+    }
+    
+    // Determine which device_id to use
+    const char *final_device_id = NULL;
+    
+    if (has_device_id) {
+        // Use provided device_id parameter
+        final_device_id = device_id;
+        printf("JSON_WRITER: Using provided device_id: %s\n", final_device_id);
+    } else if (has_imei) {
+        // Look up device_id from IMEI
+        const char *looked_up_device_id = hash_map_get_device_id(imei);
+        if (looked_up_device_id && strlen(looked_up_device_id) > 0) {
+            final_device_id = looked_up_device_id;
+            printf("JSON_WRITER: Found device_id for IMEI %s: %s\n", imei, final_device_id);
+        } else {
+            printf("JSON_WRITER: No device_id found for IMEI %s\n", imei);
+            cJSON_Delete(root);
+            return NULL;
+        }
+    }
+    
+    // Add fields to JSON
+    if (final_device_id) {
+        if (!cJSON_AddStringToObject(root, "device_id", final_device_id)) {
+            printf("JSON_WRITER: Failed to add device_id to JSON\n");
+            cJSON_Delete(root);
+            return NULL;
+        }
+    }
+    
+    if (!cJSON_AddStringToObject(root, "type", "device_status")) {
+        printf("JSON_WRITER: Failed to add type to JSON\n");
+        cJSON_Delete(root);
+        return NULL;
+    }
+    
+    if (!cJSON_AddNumberToObject(root, "status", is_online)) {
+        printf("JSON_WRITER: Failed to add status to JSON\n");
+        cJSON_Delete(root);
+        return NULL;
+    }
+    
+    
+    // Generate JSON string
     char *json_string = cJSON_Print(root);
     cJSON_Delete(root);
-
-    return json_string;
-
+    
+    if (!json_string) {
+        printf("JSON_WRITER: Failed to serialize JSON to string\n");
+        return NULL;
+    }
+    
+    printf("JSON_WRITER: Generated status JSON: %s\n", json_string);
+    return json_string;  // Caller must free() this string
 }
 
-char* device_details_json(int battery,int upload_interval,int signal_strength){
+
+char* device_details_json(int battery,int upload_interval,int signal_strength,const char* imei){
     cJSON *root = cJSON_CreateObject();
     if (!root) {
         return NULL;
     }
+    const char *device_id = hash_map_get_device_id(imei);
+    if(device_id){
+        cJSON_AddStringToObject(root, "device_id", device_id);
+    } else {
+        cJSON_AddStringToObject(root, "device_id", "unknown");
+    }
+    cJSON_AddStringToObject(root, "type", "device_details");
     cJSON_AddNumberToObject(root, "battery", battery);
     cJSON_AddNumberToObject(root, "upload_interval", upload_interval);
     cJSON_AddNumberToObject(root, "signal_strength", signal_strength);

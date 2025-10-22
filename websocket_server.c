@@ -400,7 +400,7 @@ static int handle_websocket_handshake(int fd) {
     // Check if device is online and send status message
     int is_online = (imei_id && device_online_status(imei_id)) ? 1 : 0;
     {
-        char *device_status_msg = device_online_status_json(is_online);
+        char *device_status_msg = device_online_status_json(is_online,NULL,normalized_device_id[0] ? normalized_device_id : NULL);
         if (device_status_msg) {
             websocket_send_to_imei_id(imei_id, device_status_msg, strlen(device_status_msg));
             free(device_status_msg);

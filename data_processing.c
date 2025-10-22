@@ -223,13 +223,11 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
     const char *last15 = (num_digits >= 15) ? (imei + (num_digits - 15)) : imei;
     snprintf(c->imei_id, sizeof(c->imei_id), "%.15s", last15);
     // we will inform app to device status online
-    char* device_status_msg = device_online_status_json(1);
+    char* device_status_msg = device_online_status_json(1, c->imei_id, NULL);
     // Get device_id for this IMEI and send to device_id
     const char *device_id = hash_map_get_device_id(c->imei_id);
     if (device_id) {
         websocket_send_to_device_id(device_id, device_status_msg, strlen(device_status_msg));
-    } else {
-        websocket_send_to_imei_id(c->imei_id, device_status_msg, strlen(device_status_msg));
     }
     free(device_status_msg);
     c->has_imei_id = 1;
@@ -368,7 +366,7 @@ void process_device_details_command(Conn *c, const unsigned char *cmd, int len) 
     printf("  - Upload Interval: %d minutes\n", status_upload_interval); // Will print: 10 minutes
     printf("  - Signal Strength: %d\n", signal_strength);     // Will print: 64%
     
-    char* device_details_msg = device_details_json(battery_level,status_upload_interval,signal_strength);
+    char* device_details_msg = device_details_json(battery_level,status_upload_interval,signal_strength,c->imei_id);
     if (!device_details_msg) {
         printf("DATA_PROC: Failed to create device details JSON message\n");
         return;
