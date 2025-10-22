@@ -301,6 +301,8 @@ DeviceEntry* hash_map_create_entry(const char *imei, const char *device_id) {
     
     atomic_fetch_add(&g_hash_map.total_entries, 1);
     
+    device_entry_ref(entry);  // ← Now entry has ref_count = 2
+
     pthread_rwlock_unlock(&g_hash_map.imei_buckets[index].rwlock);
     
     printf("CREATED new entry for IMEI: %s, device_id: %s\n", 
@@ -444,10 +446,11 @@ int hash_map_remove_tcp_connection(const char *imei) {
     if (!entry) return -1;
     
     unsigned int index = hash_function(imei);
+    int fd_to_cleanup = -1;
+    
     pthread_rwlock_wrlock(&g_hash_map.imei_buckets[index].rwlock);
     
     // Save FD BEFORE cleaning up the connection
-    int fd_to_cleanup = -1;
     if (entry->tcp_conn) {
         fd_to_cleanup = entry->tcp_conn->fd;  // Save FD first
         
@@ -460,16 +463,28 @@ int hash_map_remove_tcp_connection(const char *imei) {
     entry->is_online = 0;
     entry->last_activity = time(NULL);
     
-    // ... rest of the function ...
+    // Schedule removal if no WebSocket connection either
+    if (entry->ws_conn == NULL) {
+        entry->removal_scheduled = 1;
+        printf("Both connections gone for IMEI: %s, scheduling removal\n", imei);
+    }
     
     pthread_rwlock_unlock(&g_hash_map.imei_buckets[index].rwlock);
+    
+    // Notify callback about TCP disconnection
+    if (g_state_callback) {
+        g_state_callback(imei, CONN_TYPE_TCP, 0);
+    }
     
     // Clean up FD mapping AFTER unlocking
     if (fd_to_cleanup != -1) {
         fd_map_remove_tcp(fd_to_cleanup);
     }
     
+    // Release the reference we got from hash_map_find_by_imei
     device_entry_unref(entry);
+    
+    printf("TCP connection REMOVED for IMEI: %s (fd=%d)\n", imei, fd_to_cleanup);
     return 0;
 }
 
@@ -685,7 +700,8 @@ void hash_map_cleanup_scheduled_removals(void) {
                 if (current->ws_conn && g_hash_map.ws_cleanup_cb) {
                     g_hash_map.ws_cleanup_cb(current->ws_conn);
                 }
-                
+                // Release hash map's ownership reference
+                // This might free the entry if no one else holds a reference
                 device_entry_unref(current);
                 removed_count++;
             } else {
@@ -879,5 +895,31 @@ int hash_map_is_connection_online_by_fd(int fd) {
     if (!imei) return 0;
     
     return hash_map_is_device_online(imei);
+}
+
+const char* hash_map_get_imei_by_device_id(const char *device_id) {
+    if (!device_id) return NULL;
+    
+    // Search through all entries to find device_id match
+    for (int i = 0; i < HASH_MAP_CAPACITY; i++) {
+        pthread_rwlock_rdlock(&g_hash_map.imei_buckets[i].rwlock);
+        
+        DeviceEntry *current = g_hash_map.imei_buckets[i].head;
+        while (current) {
+            if (current->device_id[0] != '\0' && strcmp(current->device_id, device_id) == 0) {
+                device_entry_ref(current);
+                pthread_rwlock_unlock(&g_hash_map.imei_buckets[i].rwlock);
+                
+                const char *imei = current->imei;
+                device_entry_unref(current);
+                return imei;
+            }
+            current = current->next;
+        }
+        
+        pthread_rwlock_unlock(&g_hash_map.imei_buckets[i].rwlock);
+    }
+    
+    return NULL;
 }
 

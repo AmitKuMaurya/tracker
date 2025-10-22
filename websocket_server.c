@@ -690,32 +690,52 @@ static void remove_websocket_connection(int fd) {
 static void cleanup_websocket_connection(int fd) {
     char imei_to_cleanup[MAX_IMEI_LENGTH] = {0};
     int has_imei_to_cleanup = 0;
+    int slot_index = -1;
     
+    // STEP 1: Find the connection and copy its IMEI
     for (int i = 0; i < MAX_WS_CONNECTIONS; i++) {
         if (g_ws_connections[i].fd == fd) {
+            slot_index = i;
             if (g_ws_connections[i].has_imei) {
-                strcpy(imei_to_cleanup, g_ws_connections[i].imei);
+                strncpy(imei_to_cleanup, g_ws_connections[i].imei, 
+                        sizeof(imei_to_cleanup) - 1);
+                imei_to_cleanup[sizeof(imei_to_cleanup) - 1] = '\0';
                 has_imei_to_cleanup = 1;
             }
-            
-            epoll_ctl(g_ws_server.epoll_fd, EPOLL_CTL_DEL, fd, NULL);
-            close(fd);
-            
-            if (g_ws_connections[i].write_buf) {
-                free(g_ws_connections[i].write_buf);
-            }
-            
-            memset(&g_ws_connections[i], 0, sizeof(WSConnection));
-            g_ws_connections[i].fd = -1;
             break;
         }
     }
     
-    // Remove from hashmap OUTSIDE the mutex
+    if (slot_index == -1) {
+        // Connection not found
+        return;
+    }
+    
+    // ✅ STEP 2: Remove from hashmap FIRST (while data is still valid)
     if (has_imei_to_cleanup) {
+        // This will call the cleanup callback while the connection is still valid
         hash_map_remove_ws_connection(imei_to_cleanup);
         fd_map_remove_ws(fd);
     }
+    
+    // ✅ STEP 3: NOW it's safe to clean up the connection
+    // Remove from epoll
+    epoll_ctl(g_ws_server.epoll_fd, EPOLL_CTL_DEL, fd, NULL);
+    
+    // Close the socket
+    close(fd);
+    
+    // Free write buffer if allocated
+    if (g_ws_connections[slot_index].write_buf) {
+        free(g_ws_connections[slot_index].write_buf);
+        g_ws_connections[slot_index].write_buf = NULL;
+    }
+    
+    // Clear the connection slot
+    memset(&g_ws_connections[slot_index], 0, sizeof(WSConnection));
+    g_ws_connections[slot_index].fd = -1;
+    
+    printf("WebSocket: Cleaned up connection fd=%d (slot %d)\n", fd, slot_index);
 }
 
 

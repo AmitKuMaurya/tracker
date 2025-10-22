@@ -85,6 +85,7 @@ int hash_map_is_device_registered(const char *imei);
 
 // Get basic info
 const char* hash_map_get_device_id(const char *imei);
+const char* hash_map_get_imei_by_device_id(const char *device_id);
 time_t hash_map_get_last_activity(const char *imei);
 
 // Get connections (with reference counting)
