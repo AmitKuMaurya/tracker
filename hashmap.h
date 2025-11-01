@@ -106,9 +106,7 @@ void device_entry_unref(DeviceEntry *entry);
 // ==================== CLEANUP CALLBACKS ====================
 void hash_map_set_cleanup_callbacks(void (*tcp_cleanup)(Conn *), void (*ws_cleanup)(struct WSConnection *));
 
-// ==================== NOTIFICATION CALLBACKS ====================
-typedef void (*connection_state_callback_t)(const char *imei, int connection_type, int is_connected);
-void hash_map_set_state_callback(connection_state_callback_t callback);
+
 
 //=============persinal=================
 void fd_map_set_tcp(int fd, const char *imei);

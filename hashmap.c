@@ -19,7 +19,6 @@ static pthread_rwlock_t fd_map_lock = PTHREAD_RWLOCK_INITIALIZER;
 
 // Global hash map instance
 static UnifiedHashMap g_hash_map = {0};
-static connection_state_callback_t g_state_callback = NULL;
 
 // ==================== PRIVATE HELPER FUNCTIONS ====================
 
@@ -377,7 +376,7 @@ int hash_map_set_tcp_connection(const char *imei, const char *device_id, Conn *t
     pthread_rwlock_wrlock(&g_hash_map.imei_buckets[index].rwlock);
     
     // Check if replacing existing connection
-    if (entry->tcp_conn && entry->tcp_conn != tcp_conn && g_hash_map.tcp_cleanup_cb) {
+    if (entry->tcp_conn && entry->tcp_conn != tcp_conn && g_hash_map.tcp_cleanup_cb) {// here we checking that old same imei connection is different from new one if so we cleaning up old one
         g_hash_map.tcp_cleanup_cb(entry->tcp_conn);
     }
     
@@ -389,9 +388,7 @@ int hash_map_set_tcp_connection(const char *imei, const char *device_id, Conn *t
     pthread_rwlock_unlock(&g_hash_map.imei_buckets[index].rwlock);
     
     // Notify callback about TCP connection
-    if (g_state_callback) {
-        g_state_callback(imei, CONN_TYPE_TCP, 1);
-    }
+
     
     device_entry_unref(entry);
     
@@ -429,9 +426,7 @@ int hash_map_set_ws_connection(const char *imei, struct WSConnection *ws_conn) {
     pthread_rwlock_unlock(&g_hash_map.imei_buckets[index].rwlock);
     
     // Notify callback about WebSocket connection
-    if (g_state_callback) {
-        g_state_callback(imei, CONN_TYPE_WS, 1);
-    }
+ 
     
     device_entry_unref(entry);
     
@@ -464,17 +459,15 @@ int hash_map_remove_tcp_connection(const char *imei) {
     entry->last_activity = time(NULL);
     
     // Schedule removal if no WebSocket connection either
-    if (entry->ws_conn == NULL) {
-        entry->removal_scheduled = 1;
-        printf("Both connections gone for IMEI: %s, scheduling removal\n", imei);
-    }
+     // i think if tcp connection removed than there is nopoint to check ws_conn exist or not we should directly schedule removal
+    entry->removal_scheduled = 1;
+    printf("Both connections gone for IMEI: %s, scheduling removal\n", imei);
+    
     
     pthread_rwlock_unlock(&g_hash_map.imei_buckets[index].rwlock);
     
     // Notify callback about TCP disconnection
-    if (g_state_callback) {
-        g_state_callback(imei, CONN_TYPE_TCP, 0);
-    }
+   
     
     // Clean up FD mapping AFTER unlocking
     if (fd_to_cleanup != -1) {
@@ -513,9 +506,7 @@ int hash_map_remove_ws_connection(const char *imei) {
     pthread_rwlock_unlock(&g_hash_map.imei_buckets[index].rwlock);
     
     // Notify callback about WebSocket disconnection
-    if (g_state_callback) {
-        g_state_callback(imei, CONN_TYPE_WS, 0);
-    }
+
     
     device_entry_unref(entry);
     
@@ -812,9 +803,7 @@ void hash_map_set_cleanup_callbacks(void (*tcp_cleanup)(Conn *), void (*ws_clean
 
 // ==================== NOTIFICATION CALLBACKS ====================
 
-void hash_map_set_state_callback(connection_state_callback_t callback) {
-    g_state_callback = callback;
-}
+
 
 
 //=============persinal=================

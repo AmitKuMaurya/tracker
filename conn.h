@@ -26,6 +26,7 @@ typedef struct Conn {
     time_t last_activity;      /**< Timestamp of last activity */
     EventData *socket_event_data;  /**< Socket event data for cleanup */
     EventData *timer_event_data;   /**< Timer event data for cleanup */
+    int epfd;                  /**< Epoll instance for this connection */
 } Conn;
 
 #endif // CONN_H

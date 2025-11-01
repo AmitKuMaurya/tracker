@@ -18,7 +18,7 @@
 #include "database.h"
 
 #define PORT 8081
-#define MAX_EVENTS 10000
+#define MAX_EVENTS 1000
 #define BUF_SIZE 4096
 
 // Event type for cleanup timer
@@ -33,13 +33,13 @@ int make_socket_non_blocking(int fd) {
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
-int create_connection_timer(int epfd, Conn *c) {
+int create_connection_timer( Conn *c) {
     if (!c) {
         fprintf(stderr, "Invalid connection for timer creation\n");
         return -1;
     }
     
-    c->timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    c->timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC); // here we create timer_fd which we will use to get notification when times out.
     if (c->timer_fd == -1) {
         perror("timerfd_create");
         return -1;
@@ -50,15 +50,15 @@ int create_connection_timer(int epfd, Conn *c) {
     timer_spec.it_value.tv_nsec = 0;
     timer_spec.it_interval.tv_sec = 0;
     timer_spec.it_interval.tv_nsec = 0;
-    
-    if (timerfd_settime(c->timer_fd, 0, &timer_spec, NULL) == -1) {
+
+    if (timerfd_settime(c->timer_fd, 0, &timer_spec, NULL) == -1) { // this is like start button we giving setting of timer here and start timer
         perror("timerfd_settime");
         close(c->timer_fd);
         c->timer_fd = -1;
         return -1;
     }
     
-    EventData *timer_event_data = malloc(sizeof(EventData));
+    EventData *timer_event_data = malloc(sizeof(EventData));  // here is event data pointer which we will get when time up and epoll notify us.
     if (!timer_event_data) {
         fprintf(stderr, "Failed to allocate timer event data\n");
         close(c->timer_fd);
@@ -72,8 +72,8 @@ int create_connection_timer(int epfd, Conn *c) {
     struct epoll_event timer_event;
     timer_event.data.ptr = timer_event_data;
     timer_event.events = EPOLLIN | EPOLLET;
-    
-    if (epoll_ctl(epfd, EPOLL_CTL_ADD, c->timer_fd, &timer_event) == -1) {
+
+    if (epoll_ctl(c->epfd, EPOLL_CTL_ADD, c->timer_fd, &timer_event) == -1) {
         perror("epoll_ctl: add timer");
         close(c->timer_fd);
         free(timer_event_data);
@@ -87,7 +87,7 @@ int create_connection_timer(int epfd, Conn *c) {
     return 0;
 }
 
-int reset_connection_timer(Conn *c) {
+int reset_connection_timer(Conn *c) { // in this function we just again set the timer again when we get data from client so that timer restarts again from 0
     if (!c || c->timer_fd == -1) {
         return -1;
     }
@@ -108,13 +108,13 @@ int reset_connection_timer(Conn *c) {
     return 0;
 }
 
-void handle_connection_timeout(int epfd, Conn *c) {
+void handle_connection_timeout( Conn *c) {
     if (!c) return;
     
     printf("TIMER: Connection timeout - closing fd=%d (imei_id: %s)\n", 
            c->fd, c->has_imei_id ? c->imei_id : "unknown");
 
-    char* device_status_msg = device_online_status_json(0);
+    char* device_status_msg = device_online_status_json(0, c->imei_id, NULL);
     const char *device_id = hash_map_get_device_id(c->imei_id);
     if (device_id) {
         websocket_send_to_device_id(device_id, device_status_msg, strlen(device_status_msg));
@@ -122,54 +122,21 @@ void handle_connection_timeout(int epfd, Conn *c) {
     free(device_status_msg);
     
     hash_map_remove_tcp_connection_by_fd(c->fd);
-    
-    if (c->timer_fd != -1) {
-        epoll_ctl(epfd, EPOLL_CTL_DEL, c->timer_fd, NULL);
-        close(c->timer_fd);
-        c->timer_fd = -1;
-    }
-    
-    if (c->fd != -1) {
-        epoll_ctl(epfd, EPOLL_CTL_DEL, c->fd, NULL);
-        close(c->fd);
-        c->fd = -1;
-    }
-    
-    free(c);
     printf("TIMER: Connection cleanup completed\n");
 }
 
-void cleanup_connection(int epfd, Conn *c) {
+void cleanup_connection( Conn *c) {
     if (!c) return;
     
     printf("CLEANUP: Cleaning up connection fd=%d\n", c->fd);
-    
+    char* msg = device_online_status_json(0, c->imei_id, NULL);
+    websocket_send_to_device_id(hash_map_get_device_id(c->imei_id), msg, strlen(msg));
+    free(msg);
+
     hash_map_remove_tcp_connection_by_fd(c->fd);
-    
-    if (c->timer_fd != -1) {
-        epoll_ctl(epfd, EPOLL_CTL_DEL, c->timer_fd, NULL);
-        close(c->timer_fd);
-        c->timer_fd = -1;
-    }
-    if (c->timer_event_data) {
-        free(c->timer_event_data);
-        c->timer_event_data = NULL;
-    }
-    
-    if (c->fd != -1) {
-        epoll_ctl(epfd, EPOLL_CTL_DEL, c->fd, NULL);
-        close(c->fd);
-        c->fd = -1;
-    }
-    if (c->socket_event_data) {
-        free(c->socket_event_data);
-        c->socket_event_data = NULL;
-    }
-    
-    free(c);
 }
 
-void handle_read(int epfd, Conn *c) {
+void handle_read( Conn *c) {
     if (!c || c->fd == -1) return;
     
     while (1) {
@@ -178,13 +145,13 @@ void handle_read(int epfd, Conn *c) {
         if (count == -1) {
             if (errno != EAGAIN) {
                 perror("recv");
-                cleanup_connection(epfd, c);
+                cleanup_connection(c);
                 return;
             }
             break;
         } else if (count == 0) {
             printf("CLIENT: Connection closed by client fd=%d\n", c->fd);
-            cleanup_connection(epfd, c);
+            cleanup_connection(c);
             return;
         } else {
             reset_connection_timer(c);
@@ -228,6 +195,7 @@ void handle_accept(int server_fd, int epfd) {
         c->inbuf_used = 0;
         c->socket_event_data = NULL;
         c->timer_event_data = NULL;
+        c->epfd = epfd;  // Store epoll fd in connection
 
         EventData *socket_event_data = malloc(sizeof(EventData));
         if (!socket_event_data) {
@@ -251,7 +219,7 @@ void handle_accept(int server_fd, int epfd) {
             continue;
         }
         
-        if (create_connection_timer(epfd, c) == -1) {
+        if (create_connection_timer(c) == -1) {
             fprintf(stderr, "Failed to create timer for connection fd=%d\n", infd);
             epoll_ctl(epfd, EPOLL_CTL_DEL, infd, NULL);
             free(socket_event_data);
@@ -264,7 +232,7 @@ void handle_accept(int server_fd, int epfd) {
     }
 }
 
-void handle_timer_event(int epfd, Conn *c) {
+void handle_timer_event(Conn *c) {// hthis function is useless we can directly call handle_connection_timeout in main epoll loop we can update it later
     if (!c || c->timer_fd == -1) return;
     
     uint64_t timer_data;
@@ -276,12 +244,26 @@ void handle_timer_event(int epfd, Conn *c) {
     }
     
     printf("TIMER: Timer expired for connection fd=%d (timer_fd=%d)\n", c->fd, c->timer_fd);
-    handle_connection_timeout(epfd, c);
+    handle_connection_timeout(c);
 }
 
 void tcp_connection_cleanup(Conn *conn) {
     if (conn) {
         printf("TCP cleanup callback for fd=%d\n", conn->fd);
+        // ✅ DOES ALL THE CLEANUP:
+        if (conn->timer_fd != -1) {
+            epoll_ctl(conn->epfd, EPOLL_CTL_DEL, conn->timer_fd, NULL);
+            close(conn->timer_fd);
+            conn->timer_fd = -1;
+        }
+        if (conn->fd != -1) {
+            epoll_ctl(conn->epfd, EPOLL_CTL_DEL, conn->fd, NULL);
+            close(conn->fd);
+            conn->fd = -1;
+        }
+        free(conn->timer_event_data);
+        free(conn->socket_event_data);
+        free(conn);
     }
 }
 
@@ -434,12 +416,12 @@ int main() {
                 
                 if (event_data->event_type == EVENT_TYPE_SOCKET) {
                     if (events[i].events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
-                        cleanup_connection(epfd, c);
+                        cleanup_connection(c);
                         continue;
                     }
-                    handle_read(epfd, c);
+                    handle_read(c);
                 } else if (event_data->event_type == EVENT_TYPE_TIMER) {
-                    handle_timer_event(epfd, c);
+                    handle_timer_event(c);
                 } else {
                     fprintf(stderr, "EPOLL: Unknown event type: %d\n", event_data->event_type);
                 }
