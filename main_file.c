@@ -113,13 +113,6 @@ void handle_connection_timeout( Conn *c) {
     
     printf("TIMER: Connection timeout - closing fd=%d (imei_id: %s)\n", 
            c->fd, c->has_imei_id ? c->imei_id : "unknown");
-
-    char* device_status_msg = device_online_status_json(0, c->imei_id, NULL);
-    const char *device_id = hash_map_get_device_id(c->imei_id);
-    if (device_id) {
-        websocket_send_to_device_id(device_id, device_status_msg, strlen(device_status_msg));
-    }
-    free(device_status_msg);
     
     hash_map_remove_tcp_connection_by_fd(c->fd);
     printf("TIMER: Connection cleanup completed\n");
@@ -129,9 +122,6 @@ void cleanup_connection( Conn *c) {
     if (!c) return;
     
     printf("CLEANUP: Cleaning up connection fd=%d\n", c->fd);
-    char* msg = device_online_status_json(0, c->imei_id, NULL);
-    websocket_send_to_device_id(hash_map_get_device_id(c->imei_id), msg, strlen(msg));
-    free(msg);
 
     hash_map_remove_tcp_connection_by_fd(c->fd);
 }

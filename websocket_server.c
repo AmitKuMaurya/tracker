@@ -384,7 +384,7 @@ static int handle_websocket_handshake(int fd) {
                 g_ws_connections[i].has_imei = 1;
                 
                 // Register WebSocket connection in hashmap for fast lookups
-                hash_map_set_ws_connection(imei_id, (struct WSConnection*)&g_ws_connections[i]);
+                hash_map_set_ws_connection(imei_id, (struct WSConnection*)&g_ws_connections[i], fd);
                 
                 // Set up fast FD-to-IMEI mapping for O(1) lookups
                 fd_map_set_ws(fd, imei_id);

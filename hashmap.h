@@ -69,7 +69,7 @@ DeviceEntry* hash_map_create_temporary_entry(const char *imei);
 
 // ==================== CONNECTION MANAGEMENT ====================
 int hash_map_set_tcp_connection(const char *imei, const char *device_id, Conn *tcp_conn);
-int hash_map_set_ws_connection(const char *imei, struct WSConnection *ws_conn);
+int hash_map_set_ws_connection(const char *imei, struct WSConnection *ws_conn, int fd);
 int hash_map_remove_tcp_connection(const char *imei);
 int hash_map_remove_ws_connection(const char *imei);
 void hash_map_remove_tcp_connection_by_fd(int fd);
