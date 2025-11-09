@@ -17,6 +17,9 @@
 #include "websocket_server.h"
 #include "database.h"
 
+// Forward declarations
+void ws_connection_cleanup(WSConnection *ws_conn);
+
 #define PORT 8081
 #define MAX_EVENTS 1000
 #define BUF_SIZE 4096
@@ -270,7 +273,7 @@ int main() {
     } else {
         printf("Hashmap initialized successfully\n");
     }
-    hash_map_set_cleanup_callbacks(tcp_connection_cleanup, NULL);
+    hash_map_set_cleanup_callbacks(tcp_connection_cleanup, (void (*)(struct WSConnection *))ws_connection_cleanup);
     
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd == -1) {
@@ -331,8 +334,8 @@ int main() {
     }
     
     struct itimerspec cleanup_spec = {0};
-    cleanup_spec.it_value.tv_sec = 30;      // First trigger after 30 seconds
-    cleanup_spec.it_interval.tv_sec = 30;   // Repeat every 30 seconds
+    cleanup_spec.it_value.tv_sec = 60;      // First trigger after 60 seconds
+    cleanup_spec.it_interval.tv_sec = 60;   // Repeat every 60 seconds
     if (timerfd_settime(g_cleanup_timer_fd, 0, &cleanup_spec, NULL) == -1) {
         perror("timerfd_settime cleanup");
         exit(EXIT_FAILURE);

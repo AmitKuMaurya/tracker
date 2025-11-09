@@ -18,6 +18,9 @@ struct WSConnection;
 #define REMOVAL_GRACE_PERIOD 30
 #define TEMPORARY_NODE_TIMEOUT 300  // 5 minutes for WebSocket-only nodes
 
+// Forward declaration
+typedef struct WSConnection WSConnection;
+
 // Device entry structure - stores ALL device data
 typedef struct DeviceEntry {
     atomic_int ref_count;

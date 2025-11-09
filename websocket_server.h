@@ -43,7 +43,7 @@ typedef enum {
 } WSState;
 
 // WebSocket connection structure
-typedef struct {
+typedef struct WSConnection {
     int fd;
     char imei[32];
     int has_imei;
@@ -54,6 +54,8 @@ typedef struct {
     char *write_buf;
     size_t write_buf_len;
     size_t write_buf_used;
+    struct EventData_W *socket_event_data;
+    int epfd;  // ✅ Add this to store epoll fd
 } WSConnection;
 
 // WebSocket server structure
@@ -64,12 +66,23 @@ typedef struct {
     int running;
 } WSServer;
 
+// Event type identifiers
+#define EVENT_TYPE_SOCKET_W 1
+#define EVENT_TYPE_TIMER_W 2
+
+// Event data structure to distinguish between socket and timer events
+typedef struct EventData_W {
+    WSConnection *ws_conn;
+    int event_type;  // EVENT_TYPE_SOCKET_W or EVENT_TYPE_TIMER_W
+} EventData_W;
+
 // Function declarations
 int websocket_server_init(void);
 void websocket_server_start(void);
 void websocket_server_stop(void);
 
 int websocket_send_to_device_id(const char *device_id, const char *data, size_t len);
+int websocket_send_to_imei_id(const char *imei_id, const char *data, size_t len);
 int websocket_broadcast(const char *data, size_t len);
 
 #endif // WEBSOCKET_SERVER_H

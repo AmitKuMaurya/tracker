@@ -624,6 +624,10 @@ int hash_map_remove_ws_connection(const char *imei) {
         g_hash_map.ws_cleanup_cb(ws_to_cleanup);
     }
     
+    // Clean up FD mapping (get fd from ws_to_cleanup before callback possibly frees it)
+    // Note: We need to get the FD before calling cleanup callback
+    // The FD is removed from fd_map during cleanup_websocket_connection in websocket_server.c
+    
     // Release the reference from hash_map_find_by_imei
     device_entry_unref(entry);
     
@@ -642,7 +646,7 @@ void hash_map_remove_tcp_connection_by_fd(int fd) {
     const char *imei = fd_map_get_tcp_imei(fd);
     if (imei) {
         hash_map_remove_tcp_connection(imei);
-        fd_map_remove_tcp(fd);
+        // Note: fd_map_remove_tcp is already called inside hash_map_remove_tcp_connection
         return;
     }
     
