@@ -101,15 +101,38 @@ void websocket_server_stop(void) {
     if (!g_ws_server.running) {
         return;
     }
-    
+
+    printf("Stopping WebSocket server...\n");
+
+    // Stop main loop
     g_ws_server.running = 0;
     pthread_join(g_ws_server.thread_id, NULL);
-    
+
+    // Lock while cleaning up connections
+    pthread_mutex_lock(&g_ws_connections_mutex);
+
+    // Iterate through all hash map entries (you likely have hash_map_iterate or similar)
+    hash_map_foreach_entry([](DeviceEntry *entry) {
+        if (entry && entry->ws_conn) {
+            ws_connection_cleanup(entry->ws_conn);
+            free(entry->ws_conn);
+            entry->ws_conn = NULL;
+        }
+        free(entry);
+    });
+
+    // After cleaning, free the hash map itself
+    hash_map_clear();
+
+    pthread_mutex_unlock(&g_ws_connections_mutex);
+
+    // Close sockets
     close(g_ws_server.epoll_fd);
     close(g_ws_server.server_fd);
-    
-    printf("WebSocket server stopped\n");
+
+    printf("WebSocket server stopped and all connections freed.\n");
 }
+
 
 static void *websocket_server_thread(void *arg) {
     (void)arg;
@@ -438,9 +461,9 @@ static int handle_websocket_frame(WSConnection *conn) {
 // It should NOT free the WSConnection - that's done by remove_websocket_connection
 void ws_connection_cleanup(WSConnection *ws_conn) {
     if (!ws_conn) return;
-    
+    if (ws_conn->cleanup_in_progress) return;
     printf("HASHMAP CALLBACK: ws_connection_cleanup for fd=%d\n", ws_conn->fd);
-    
+    ws_conn->cleanup_in_progress = 1;
     // ✅ If the connection is still alive (not cleaned up by epoll thread),
     // we need to clean it up now
     if (ws_conn->fd != -1) {
@@ -466,8 +489,6 @@ void ws_connection_cleanup(WSConnection *ws_conn) {
         ws_conn->socket_event_data = NULL;
     }
     
-    // ✅ Free the WSConnection itself
-    free(ws_conn);
     
     printf("HASHMAP CALLBACK: ws_connection_cleanup completed\n");
 }
