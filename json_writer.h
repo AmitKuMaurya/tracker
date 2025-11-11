@@ -78,4 +78,6 @@ char* device_online_status_json(int is_online, const char* imei, const char* dev
 
 char* device_details_json(int battery,int upload_interval,int signal_strength,const char* imei);
 
+char* device_validation_json(const char* device_id, int is_valid);
+
 #endif // JSON_WRITER_H

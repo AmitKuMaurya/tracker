@@ -323,7 +323,11 @@ char* create_websocket_lbs_message(const char *imei, const LBSData *lbs_data) {
     cJSON_AddNumberToObject(root, "accuracy", lbs_data->location->accuracy_m);
     
     // Add source information
-    cJSON_AddStringToObject(root, "source", "lbs");
+    if(lbs_data->wifi_count > 0){
+        cJSON_AddStringToObject(root, "source", "WIFI_LBS");
+    } else {
+        cJSON_AddStringToObject(root, "source", "LBS");
+    }
     cJSON_AddNumberToObject(root, "cell_count", lbs_data->unique_lbs_count);
     cJSON_AddNumberToObject(root, "wifi_count", lbs_data->unique_wifi_count);
     
@@ -429,6 +433,26 @@ char* device_details_json(int battery,int upload_interval,int signal_strength,co
     cJSON_AddNumberToObject(root, "battery", battery);
     cJSON_AddNumberToObject(root, "upload_interval", upload_interval);
     cJSON_AddNumberToObject(root, "signal_strength", signal_strength);
+    
+    char *json_string = cJSON_Print(root);
+    cJSON_Delete(root);
+
+    return json_string;
+
+}
+
+char* device_validation_json(const char* device_id, int is_valid){
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        return NULL;
+    }
+    if(device_id){
+        cJSON_AddStringToObject(root, "device_id", device_id);
+    } else {
+        cJSON_AddStringToObject(root, "device_id", "unknown");
+    }
+    cJSON_AddStringToObject(root, "type", "device_validation");
+    cJSON_AddNumberToObject(root, "is_valid", is_valid);
     
     char *json_string = cJSON_Print(root);
     cJSON_Delete(root);
