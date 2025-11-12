@@ -8,13 +8,12 @@
 static DBConnection db_conn = {0};
 
 // Database connection string
-static const char* DB_CONNECTION_STRING = "postgresql://postgres:postgres@107.21.29.223:5432/tracker";
-
+const char* db_connection_string = getenv("DB_CONN_STRING");
 int db_init(void) {
     printf("DATABASE: Initializing PostgreSQL connection\n");
     
     // Initialize the connection structure
-    strncpy(db_conn.connection_string, DB_CONNECTION_STRING, sizeof(db_conn.connection_string) - 1);
+    strncpy(db_conn.connection_string, db_connection_string, sizeof(db_conn.connection_string) - 1);
     db_conn.connection_string[sizeof(db_conn.connection_string) - 1] = '\0';
     db_conn.conn = NULL;
     db_conn.is_connected = false;

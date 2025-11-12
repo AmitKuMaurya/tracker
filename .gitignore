@@ -3,7 +3,9 @@ cat > .gitignore << 'EOF'
 *.o
 *.out
 *.exe
-
+*# ignore environment & secrets
+.env
+*.env
 # common build folders
 obj/
 .git/*
