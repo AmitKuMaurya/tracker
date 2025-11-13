@@ -21,6 +21,7 @@ static int create_websocket_frame(char *buf, size_t buf_len,
 static int base64_encode(const unsigned char *input, size_t input_len, 
                         char *output, size_t output_len);
 static void remove_websocket_connection(WSConnection *conn);
+static void cleanup_ws_connection_callback(const char *imei, WSConnection *conn, void *ctx);
 void ws_connection_cleanup(WSConnection *ws_conn);
 bool device_online_status(const char *imei);
 
@@ -108,29 +109,23 @@ void websocket_server_stop(void) {
     g_ws_server.running = 0;
     pthread_join(g_ws_server.thread_id, NULL);
 
-    // Lock while cleaning up connections
-    pthread_mutex_lock(&g_ws_connections_mutex);
-
-    // Iterate through all hash map entries (you likely have hash_map_iterate or similar)
-    hash_map_foreach_entry([](DeviceEntry *entry) {
-        if (entry && entry->ws_conn) {
-            ws_connection_cleanup(entry->ws_conn);
-            free(entry->ws_conn);
-            entry->ws_conn = NULL;
-        }
-        free(entry);
-    });
-
-    // After cleaning, free the hash map itself
-    hash_map_clear();
-
-    pthread_mutex_unlock(&g_ws_connections_mutex);
+    // Clean up any remaining WebSocket connections tracked in the hash map
+    hash_map_for_each_ws_connection(cleanup_ws_connection_callback, NULL);
 
     // Close sockets
     close(g_ws_server.epoll_fd);
     close(g_ws_server.server_fd);
 
     printf("WebSocket server stopped and all connections freed.\n");
+}
+
+static void cleanup_ws_connection_callback(const char *imei, WSConnection *conn, void *ctx) {
+    (void)imei;
+    (void)ctx;
+
+    if (conn) {
+        remove_websocket_connection(conn);
+    }
 }
 
 

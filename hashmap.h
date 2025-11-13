@@ -125,6 +125,12 @@ const char* hash_map_get_imei_by_fd(int fd);
 // Fast connection status check by FD
 int hash_map_is_connection_online_by_fd(int fd);
 
+// ==================== ITERATION HELPERS ====================
+void hash_map_for_each_ws_connection(void (*callback)(const char *imei,
+                                                      struct WSConnection *conn,
+                                                      void *ctx),
+                                     void *ctx);
+
 
 
 #define CONN_TYPE_TCP 1

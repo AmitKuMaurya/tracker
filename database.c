@@ -8,11 +8,17 @@
 static DBConnection db_conn = {0};
 
 // Database connection string
-const char* db_connection_string = getenv("DB_CONN_STRING");
+static const char* db_connection_string = NULL;
 int db_init(void) {
     printf("DATABASE: Initializing PostgreSQL connection\n");
     
     // Initialize the connection structure
+    db_connection_string = getenv("DB_CONN_STRING");
+    if (!db_connection_string || db_connection_string[0] == '\0') {
+        fprintf(stderr, "DATABASE WARNING: DB_CONN_STRING not set, using empty string\n");
+        db_connection_string = "";
+    }
+
     strncpy(db_conn.connection_string, db_connection_string, sizeof(db_conn.connection_string) - 1);
     db_conn.connection_string[sizeof(db_conn.connection_string) - 1] = '\0';
     db_conn.conn = NULL;

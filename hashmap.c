@@ -1068,3 +1068,62 @@ const char* hash_map_get_imei_by_device_id(const char *device_id) {
     return NULL;
 }
 
+typedef struct {
+    char imei[MAX_IMEI_LENGTH];
+    struct WSConnection *conn;
+} WsConnectionSnapshot;
+
+void hash_map_for_each_ws_connection(void (*callback)(const char *imei,
+                                                      struct WSConnection *conn,
+                                                      void *ctx),
+                                     void *ctx) {
+    if (!callback) {
+        return;
+    }
+
+    size_t capacity = 16;
+    size_t count = 0;
+    WsConnectionSnapshot *snapshots = malloc(capacity * sizeof(*snapshots));
+    if (!snapshots) {
+        fprintf(stderr, "hash_map_for_each_ws_connection: allocation failed\n");
+        return;
+    }
+
+    for (int i = 0; i < HASH_MAP_CAPACITY; i++) {
+        pthread_rwlock_rdlock(&g_hash_map.imei_buckets[i].rwlock);
+
+        DeviceEntry *current = g_hash_map.imei_buckets[i].head;
+        while (current) {
+            if (current->ws_conn) {
+                if (count == capacity) {
+                    size_t new_capacity = capacity * 2;
+                    WsConnectionSnapshot *new_snapshots =
+                        realloc(snapshots, new_capacity * sizeof(*snapshots));
+                    if (!new_snapshots) {
+                        pthread_rwlock_unlock(&g_hash_map.imei_buckets[i].rwlock);
+                        fprintf(stderr, "hash_map_for_each_ws_connection: realloc failed\n");
+                        free(snapshots);
+                        return;
+                    }
+                    snapshots = new_snapshots;
+                    capacity = new_capacity;
+                }
+
+                strncpy(snapshots[count].imei, current->imei, sizeof(snapshots[count].imei) - 1);
+                snapshots[count].imei[sizeof(snapshots[count].imei) - 1] = '\0';
+                snapshots[count].conn = current->ws_conn;
+                count++;
+            }
+            current = current->next;
+        }
+
+        pthread_rwlock_unlock(&g_hash_map.imei_buckets[i].rwlock);
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        callback(snapshots[i].imei, snapshots[i].conn, ctx);
+    }
+
+    free(snapshots);
+}
+
