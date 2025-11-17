@@ -180,7 +180,7 @@ static void *websocket_server_thread(void *arg) {
                             printf("WebSocket: Sending device validation for device_id %s\n", conn->device_id);
                             char * device_validation_msg = device_validation_json(conn->device_id, 1);
                             if (device_validation_msg) {
-                                websocket_send_to_device_id(conn->device_id, device_validation_msg, strlen(device_validation_msg));
+                                websocket_send_to_imei_id(conn->imei_id, device_validation_msg, strlen(device_validation_msg));
                                 free(device_validation_msg);
                             }
 
