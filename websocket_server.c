@@ -171,10 +171,39 @@ static void *websocket_server_thread(void *arg) {
                 // Handle readable events
                 if (events[i].events & EPOLLIN) {
                     if (conn->state == WS_STATE_HANDSHAKE) {
-                        if (handle_websocket_handshake(conn) == 0) {
+                        int handshake_result = handle_websocket_handshake(conn);
+                        if (handshake_result == 0) {
                             conn->state = WS_STATE_OPEN;
                             printf("WebSocket: Handshake complete for fd=%d\n", conn->fd);
-                        } else {
+
+                            //After successful handshake, sending device validation success
+                            printf("WebSocket: Sending device validation for device_id %s\n", conn->device_id);
+                            char * device_validation_msg = device_validation_json(conn->device_id, 1);
+                            if (device_validation_msg) {
+                                websocket_send_to_device_id(conn->device_id, device_validation_msg, strlen(device_validation_msg));
+                                free(device_validation_msg);
+                            }
+
+                            // After successful handshake, send device online status
+                            printf("WebSocket: Sending online status for device_id %s\n", conn->device_id);
+                            int is_online = device_online_status(conn->imei) ? 1 : 0;
+                            char *device_status_msg = device_online_status_json(is_online, NULL, conn->device_id[0] ? conn->device_id : NULL);
+                            if (device_status_msg) {
+                                websocket_send_to_imei_id(conn->imei, device_status_msg, strlen(device_status_msg));
+                                free(device_status_msg);
+                            }
+                        } else if (handshake_result == -2){
+                            // Handshake failed due to invalid device_id
+                            printf("WebSocket: Invalid device_id for fd=%d\n", conn->fd);
+                            // Sending device validation failure
+                            char * device_validation_msg = device_validation_json(conn->device_id, 0);
+                            if (device_validation_msg) {
+                                websocket_send_to_device_id(conn->device_id, device_validation_msg, strlen(device_validation_msg));
+                                free(device_validation_msg);
+                            }
+                            remove_websocket_connection(conn);
+                        }
+                        else {
                             printf("WebSocket: Handshake failed for fd=%d\n", conn->fd);
                             remove_websocket_connection(conn);
                         }
@@ -367,11 +396,11 @@ static int handle_websocket_handshake(WSConnection *conn) {
     // Get IMEI from database
     const char* imei_id = db_get_imei_id(normalized_device_id);
     if (imei_id) {
-        char * device_validation_msg = device_validation_json(normalized_device_id, 1);
-        if (device_validation_msg) {
-            websocket_send_to_device_id(normalized_device_id, device_validation_msg, strlen(device_validation_msg));
-            free(device_validation_msg);
-        }
+        // char * device_validation_msg = device_validation_json(normalized_device_id, 1);
+        // if (device_validation_msg) {
+        //     websocket_send_to_device_id(normalized_device_id, device_validation_msg, strlen(device_validation_msg));
+        //     free(device_validation_msg);
+        // }
         strncpy(conn->imei, imei_id, sizeof(conn->imei) - 1);
         conn->imei[sizeof(conn->imei) - 1] = '\0';
         conn->has_imei = 1;
@@ -382,12 +411,12 @@ static int handle_websocket_handshake(WSConnection *conn) {
         printf("WebSocket: Mapped device_id %s to IMEI %s\n", normalized_device_id, imei_id);
         
         // Send online status
-        int is_online = device_online_status(imei_id) ? 1 : 0;
-        char *device_status_msg = device_online_status_json(is_online, NULL, normalized_device_id[0] ? normalized_device_id : NULL);
-        if (device_status_msg) {
-            websocket_send_to_imei_id(imei_id, device_status_msg, strlen(device_status_msg));
-            free(device_status_msg);
-        }
+        // int is_online = device_online_status(imei_id) ? 1 : 0;
+        // char *device_status_msg = device_online_status_json(is_online, NULL, normalized_device_id[0] ? normalized_device_id : NULL);
+        // if (device_status_msg) {
+        //     websocket_send_to_imei_id(imei_id, device_status_msg, strlen(device_status_msg));
+        //     free(device_status_msg);
+        // }
     } else {
         char * device_validation_msg = device_validation_json(normalized_device_id, 0); 
         if (device_validation_msg) {
@@ -395,7 +424,7 @@ static int handle_websocket_handshake(WSConnection *conn) {
             free(device_validation_msg);
         }
         printf("WebSocket: No IMEI mapping found for device_id so invalid device_id %s\n", normalized_device_id);
-        return -1;
+        return -2; // Indicate invalid device_id
     }
 
     return 0;
