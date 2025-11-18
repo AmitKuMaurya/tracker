@@ -180,7 +180,7 @@ static void *websocket_server_thread(void *arg) {
                             printf("WebSocket: Sending device validation for device_id %s\n", conn->device_id);
                             char * device_validation_msg = device_validation_json(conn->device_id, 1);
                             if (device_validation_msg) {
-                                websocket_send_to_imei_id(conn->imei_id, device_validation_msg, strlen(device_validation_msg));
+                                websocket_send_to_imei_id(conn->imei, device_validation_msg, strlen(device_validation_msg));
                                 free(device_validation_msg);
                             }
 
@@ -198,7 +198,7 @@ static void *websocket_server_thread(void *arg) {
                             // Sending device validation failure
                             char * device_validation_msg = device_validation_json(conn->device_id, 0);
                             if (device_validation_msg) {
-                                websocket_send_to_direct(conn, device_validation_msg, strlen(device_validation_msg));
+                                websocket_send_direct(conn, device_validation_msg, strlen(device_validation_msg));
                                 free(device_validation_msg);
                             }
                             remove_websocket_connection(conn);
@@ -420,7 +420,7 @@ static int handle_websocket_handshake(WSConnection *conn) {
     } else {
         char * device_validation_msg = device_validation_json(normalized_device_id, 0); 
         if (device_validation_msg) {
-            websocket_send_to_direct(conn, device_validation_msg, strlen(device_validation_msg));
+            websocket_send_direct(conn, device_validation_msg, strlen(device_validation_msg));
             free(device_validation_msg);
         }
         printf("WebSocket: No IMEI mapping found for device_id so invalid device_id %s\n", normalized_device_id);
