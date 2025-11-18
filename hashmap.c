@@ -542,7 +542,7 @@ int hash_map_remove_tcp_connection(const char *imei) {
         printf("WebSocket: Notifying device_id %s about going offline for IMEI %s\n", 
                device_id_copy, imei);
         char* msg = device_online_status_json(0, imei, NULL);
-        int websocket_result = websocket_send_to_device_id(device_id_copy, msg, strlen(msg));
+        int websocket_result = websocket_send_to_imei_id(imei, msg, strlen(msg));
         if (websocket_result < 0) {
             printf("WebSocket: Failed to send offline status for IMEI %s\n", imei);
         } else {
@@ -1073,10 +1073,7 @@ typedef struct {
     struct WSConnection *conn;
 } WsConnectionSnapshot;
 
-void hash_map_for_each_ws_connection(void (*callback)(const char *imei,
-                                                      struct WSConnection *conn,
-                                                      void *ctx),
-                                     void *ctx) {
+void hash_map_for_each_ws_connection(void (*callback)(const char *imei,struct WSConnection *conn,void *ctx), void *ctx) {
     if (!callback) {
         return;
     }

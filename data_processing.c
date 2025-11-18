@@ -225,10 +225,8 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
     // we will inform app to device status online
     char* device_status_msg = device_online_status_json(1, c->imei_id, NULL);
     // Get device_id for this IMEI and send to device_id
-    const char *device_id = hash_map_get_device_id(c->imei_id);
-    if (device_id) {
-        websocket_send_to_device_id(device_id, device_status_msg, strlen(device_status_msg));
-    }
+    websocket_send_to_imei_id(c->imei_id, device_status_msg, strlen(device_status_msg));
+    
     free(device_status_msg);
     c->has_imei_id = 1;
 
@@ -373,10 +371,7 @@ void process_device_details_command(Conn *c, const unsigned char *cmd, int len) 
     }
     
     // Get device_id for this IMEI and send to device_id
-    const char *device_id = hash_map_get_device_id(c->imei_id);
-    if (device_id) {
-        websocket_send_to_device_id(device_id, device_details_msg, strlen(device_details_msg));
-    }
+    websocket_send_to_imei_id(c->imei_id, device_details_msg, strlen(device_details_msg));
     free(device_details_msg);
 
     if(send(c->fd, cmd, len, 0)==len){

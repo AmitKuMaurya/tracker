@@ -198,7 +198,7 @@ static void *websocket_server_thread(void *arg) {
                             // Sending device validation failure
                             char * device_validation_msg = device_validation_json(conn->device_id, 0);
                             if (device_validation_msg) {
-                                websocket_send_to_device_id(conn->device_id, device_validation_msg, strlen(device_validation_msg));
+                                websocket_send_to_direct(conn, device_validation_msg, strlen(device_validation_msg));
                                 free(device_validation_msg);
                             }
                             remove_websocket_connection(conn);
@@ -420,7 +420,7 @@ static int handle_websocket_handshake(WSConnection *conn) {
     } else {
         char * device_validation_msg = device_validation_json(normalized_device_id, 0); 
         if (device_validation_msg) {
-            websocket_send_to_device_id(normalized_device_id, device_validation_msg, strlen(device_validation_msg));
+            websocket_send_to_direct(conn, device_validation_msg, strlen(device_validation_msg));
             free(device_validation_msg);
         }
         printf("WebSocket: No IMEI mapping found for device_id so invalid device_id %s\n", normalized_device_id);
@@ -609,20 +609,26 @@ int websocket_send_to_imei_id(const char *imei_id, const char *data, size_t len)
     return 0;
 }
 
-int websocket_send_to_device_id(const char *device_id, const char *data, size_t len) {
-    if (!device_id || !data || len == 0) {
+int websocket_send_direct(WSConnection *conn, const char *data, size_t len) {
+    if (!conn || !data || conn->state != WS_STATE_OPEN || conn->cleanup_in_progress) {
         return -1;
     }
-    
-    // Convert device_id to IMEI
-    const char *imei = hash_map_get_imei_by_device_id(device_id);
-    if (!imei) {
-        printf("WebSocket: No IMEI found for device_id %s\n", device_id);
-        return -1;
+
+    char frame[WS_BUF_SIZE];
+    int frame_len = create_websocket_frame(frame, sizeof(frame), data, len, WS_OP_TEXT);
+
+    if (frame_len <= 0) return -1;
+
+    ssize_t sent = send(conn->fd, frame, frame_len, 0);
+    if (sent == frame_len) {
+        printf("WebSocket: Sent %zd bytes directly to fd=%d\n", len, conn->fd);
+        return 1;
     }
-    
-    return websocket_send_to_imei_id(imei, data, len);
+
+    printf("WebSocket: Failed to send direct message to fd=%d\n", conn->fd);
+    return -1;
 }
+
 
 int websocket_broadcast(const char *data, size_t len) {
     if (!data || len == 0) {
