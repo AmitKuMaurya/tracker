@@ -225,9 +225,13 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
     // we will inform app to device status online
     char* device_status_msg = device_online_status_json(1, c->imei_id, NULL);
     // Get device_id for this IMEI and send to device_id
-    websocket_send_to_imei_id(c->imei_id, device_status_msg, strlen(device_status_msg));
+    if (device_status_msg) {
+        websocket_send_to_imei_id(c->imei_id, device_status_msg, strlen(device_status_msg));
+        free(device_status_msg);
+    } else {
+        printf("DATA_PROC: device_status_msg is NULL, skipping WS send\n");
+    }
     
-    free(device_status_msg);
     c->has_imei_id = 1;
 
     // we set status upload interval to 2 minutes (or your desired value)
