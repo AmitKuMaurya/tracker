@@ -20,5 +20,12 @@ int db_connect(void);
 void db_disconnect(void);
 char* db_get_imei_id(const char* device_id);
 char* db_get_device_id(const char* imei_id);
+int db_push_device_location(
+    const char *imei_id,
+    const char *latitude,
+    const char *longitude,
+    const char *accuracy,
+    const char *source
+);
 
 #endif // DATABASE_H

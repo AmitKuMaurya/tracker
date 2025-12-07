@@ -2,12 +2,59 @@
 #include <stdlib.h>
 #include <string.h>
 #include <curl/curl.h>
+#include <unistd.h>
 #include "lbs_latlong.h"
 #include "json_writer.h"
 
-// Google API Key - in production, this should be loaded from config file or environment variable
-#define GOOGLE_API_KEY "AIzaSyDtJkPjRS_DgYA95P98oYsIkkfZY4viuo0"
-#define GOOGLE_GEOLOCATION_URL "https://www.googleapis.com/geolocation/v1/geolocate?key=" GOOGLE_API_KEY
+// Maximum length for API key and URL
+#define MAX_API_KEY_LEN 256
+#define MAX_URL_LEN 512
+
+// Static variables to store API key and URL loaded from .env
+static char google_api_key[MAX_API_KEY_LEN] = {0};
+static char google_geolocation_url[MAX_URL_LEN] = {0};
+static int env_loaded = 0;
+
+/**
+ * @brief Load environment variables from .env file
+ * 
+ * This function reads the .env file and extracts GOOGLE_API_KEY and GOOGLE_GEOLOCATION_URL.
+ * It first checks environment variables, then falls back to .env file.
+ * 
+ * @return 0 on success, -1 on error
+ */
+static int load_env_variables(void) {
+    if (env_loaded) {
+        return 0; // Already loaded
+    }
+    
+    // First, try to get from environment variables (highest priority)
+    const char *api_key_env = getenv("GOOGLE_API_KEY");
+    const char *url_env = getenv("GOOGLE_GEOLOCATION_URL");
+    
+    if (api_key_env && api_key_env[0] != '\0') {
+        strncpy(google_api_key, api_key_env, MAX_API_KEY_LEN - 1);
+        google_api_key[MAX_API_KEY_LEN - 1] = '\0';
+    }
+    
+    if (url_env && url_env[0] != '\0') {
+        strncpy(google_geolocation_url, url_env, MAX_URL_LEN - 1);
+        google_geolocation_url[MAX_URL_LEN - 1] = '\0';
+    }
+    
+    // If both are set from environment, we're done
+    if (google_api_key[0] != '\0' && google_geolocation_url[0] != '\0') {
+        env_loaded = 1;
+        printf("LBS_GOOGLE: Environment variables loaded successfully\n");
+        return 0;
+    }
+    else{
+        printf("LBS_GOOGLE: Environment variables not loaded\n");
+        return -1;
+    }
+    
+
+}
 
 typedef struct {
     char *data;
@@ -32,6 +79,12 @@ static size_t write_memory_callback(void *contents, size_t size, size_t nmemb, v
 
 int lbs_query_google(LBSData *data) {
     if (!data) {
+        return -1;
+    }
+    
+    // Load environment variables from .env file if not already loaded
+    if (load_env_variables() != 0) {
+        fprintf(stderr, "LBS_GOOGLE: ERROR: Failed to load API key from .env file\n");
         return -1;
     }
     
@@ -86,7 +139,7 @@ int lbs_query_google(LBSData *data) {
     MemoryBuffer response = {0};
 
     // Configure CURL for Google Geolocation API
-    curl_easy_setopt(curl, CURLOPT_URL, GOOGLE_GEOLOCATION_URL);
+    curl_easy_setopt(curl, CURLOPT_URL, google_geolocation_url);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_payload);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, strlen(json_payload));

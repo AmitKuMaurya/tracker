@@ -214,4 +214,65 @@ char* db_get_device_id(const char* imei_id) {
     }
 }
 
+int db_push_device_location(
+    const char *imei_id,
+    const char *latitude,
+    const char *longitude,
+    const char *accuracy,
+    const char *source
+) {
+    // Ensure valid DB connection
+    if (!db_conn.is_connected || db_conn.conn == NULL || PQstatus(db_conn.conn) != CONNECTION_OK) {
+        fprintf(stderr, "DATABASE ERROR: Not connected to PostgreSQL\n");
+        return -1;
+    }
+
+    if (!imei_id || !latitude || !longitude || !accuracy || !source) {
+        fprintf(stderr, "DATABASE ERROR: Invalid parameters supplied to db_push_device_location\n");
+        return -1;
+    }
+
+    // SQL function call
+    const char *query =
+        "SELECT device_location_to_database($1, $2, $3, $4, $5)";
+
+    const char *params[5] = { imei_id, latitude, longitude, accuracy, source };
+    int param_lengths[5] = {
+        strlen(imei_id),
+        strlen(latitude),
+        strlen(longitude),
+        strlen(accuracy),
+        strlen(source)
+    };
+    int param_formats[5] = { 0, 0, 0, 0, 0 }; // text format
+
+    printf("DATABASE: Pushing location: IMEI=%s LAT=%s LON=%s ACC=%s SRC=%s\n",
+           imei_id, latitude, longitude, accuracy, source);
+
+    PGresult *res = PQexecParams(
+        db_conn.conn,
+        query,
+        5,          // total parameters
+        NULL,       // let PostgreSQL infer datatypes
+        params,
+        param_lengths,
+        param_formats,
+        0           // return text format
+    );
+
+    if (PQresultStatus(res) != PGRES_TUPLES_OK &&
+        PQresultStatus(res) != PGRES_COMMAND_OK) {
+        fprintf(stderr, "DATABASE ERROR: Insert failed: %s\n",
+                PQerrorMessage(db_conn.conn));
+        PQclear(res);
+        return -1;
+    }
+
+    printf("DATABASE: Location inserted successfully.\n");
+
+    PQclear(res);
+    return 0;
+}
+
+
 
