@@ -221,23 +221,24 @@ int db_push_device_location(
     const char *accuracy,
     const char *source
 ) {
-    // Ensure valid DB connection
-    if (!db_conn.is_connected || db_conn.conn == NULL || PQstatus(db_conn.conn) != CONNECTION_OK) {
+    if (!db_conn.is_connected || db_conn.conn == NULL ||
+        PQstatus(db_conn.conn) != CONNECTION_OK) {
         fprintf(stderr, "DATABASE ERROR: Not connected to PostgreSQL\n");
         return -1;
     }
 
     if (!imei_id || !latitude || !longitude || !accuracy || !source) {
-        fprintf(stderr, "DATABASE ERROR: Invalid parameters supplied to db_push_device_location\n");
+        fprintf(stderr, "DATABASE ERROR: Invalid parameters supplied\n");
         return -1;
     }
 
-    // SQL function call
-    // Note: PostgreSQL function expects: TEXT, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, TEXT
     const char *query =
-        "SELECT device_location_to_database($1::text, $2::double precision, $3::double precision, $4::double precision, $5::text)";
+        "SELECT device_location_to_database($1, $2, $3, $4, $5)";
 
-    const char *params[5] = { imei_id, latitude, longitude, accuracy, source };
+    const char *params[5] = {
+        imei_id, latitude, longitude, accuracy, source
+    };
+
     int param_lengths[5] = {
         strlen(imei_id),
         strlen(latitude),
@@ -245,24 +246,18 @@ int db_push_device_location(
         strlen(accuracy),
         strlen(source)
     };
-    int param_formats[5] = { 0, 0, 0, 0, 0 }; // text format
 
-    // Specify parameter types explicitly
-    // OID 25 = TEXT, OID 701 = DOUBLE PRECISION
-    Oid param_types[5] = { 25, 701, 701, 701, 25 };
-
-    printf("DATABASE: Pushing location: IMEI=%s LAT=%s LON=%s ACC=%s SRC=%s\n",
-           imei_id, latitude, longitude, accuracy, source);
+    int param_formats[5] = { 0, 0, 0, 0, 0 }; // TEXT only
 
     PGresult *res = PQexecParams(
         db_conn.conn,
         query,
-        5,          // total parameters
-        param_types, // specify parameter types explicitly
+        5,
+        NULL,            // 🔥 let PostgreSQL infer types
         params,
         param_lengths,
         param_formats,
-        0           // return text format
+        0
     );
 
     if (PQresultStatus(res) != PGRES_TUPLES_OK &&
@@ -273,11 +268,10 @@ int db_push_device_location(
         return -1;
     }
 
-    printf("DATABASE: Location inserted successfully.\n");
-
     PQclear(res);
     return 0;
 }
+
 
 
 
