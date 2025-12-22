@@ -104,6 +104,27 @@ void process_gps_command(Conn *c, const unsigned char *cmd, int len) {
     
     // Send location data to WebSocket clients with matching IMEI
     if (c && c->has_imei_id && gps_data.is_positioned) {
+        //send location to databse
+        const char *GPS_LOG_PREFIX = "GPS_DATA";
+        const char *accuracy_str = "10m"; // Default accuracy for GPS
+        char lat_str[32];
+        char lon_str[32];
+        snprintf(lat_str, sizeof(lat_str), "%.6f", gps_data.latitude);
+        snprintf(lon_str, sizeof(lon_str), "%.6f", gps_data.longitude);
+        if (db_push_device_location(
+                c->imei_id,
+                lat_str,
+                lon_str,
+                accuracy_str,
+                "GPS"
+        ) == 0) {
+            printf("%s GPS location pushed to database for IMEI: %s\n", 
+                   GPS_LOG_PREFIX, c->imei_id);
+        } else {
+            printf("%s Failed to push GPS location to database for IMEI: %s\n", 
+                   GPS_LOG_PREFIX, c->imei_id);
+        }
+
         char *ws_message = create_websocket_gps_message(c->imei_id, &gps_data);
         if (ws_message) {
             // Get device_id for this IMEI and send to device_id

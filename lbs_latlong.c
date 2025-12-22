@@ -138,8 +138,22 @@ int lbs_query_google(LBSData *data) {
     
     MemoryBuffer response = {0};
 
+    // Build final URL with API key as required by Google Geolocation API
+    char request_url[MAX_URL_LEN + MAX_API_KEY_LEN + 16] = {0};
+    if (strchr(google_geolocation_url, '?')) {
+        // URL already has query parameters
+        snprintf(request_url, sizeof(request_url), "%s&key=%s",
+                 google_geolocation_url, google_api_key);
+    } else {
+        // No existing query parameters
+        snprintf(request_url, sizeof(request_url), "%s?key=%s",
+                 google_geolocation_url, google_api_key);
+    }
+
+    printf("LBS_GOOGLE: Using Google Geolocation URL: %s\n", request_url);
+
     // Configure CURL for Google Geolocation API
-    curl_easy_setopt(curl, CURLOPT_URL, google_geolocation_url);
+    curl_easy_setopt(curl, CURLOPT_URL, request_url);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_payload);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, strlen(json_payload));

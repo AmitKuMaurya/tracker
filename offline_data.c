@@ -481,6 +481,28 @@ void lbs_command(Conn *c, const unsigned char *cmd, int len) {
     if (lbs_query_google(&data) == 0 && data.location && data.location->is_resolved) {
         printf("%s LBS resolved lat/lon: %.6f, %.6f, accuracy: %.1fm\n", 
                LOG_PREFIX, data.location->lat, data.location->lon, data.location->accuracy_m);
+        // Format values as strings for database insertion
+        char lat_str[32];
+        char lon_str[32];
+        char accuracy_str[32];
+        snprintf(lat_str, sizeof(lat_str), "%.6f", data.location->lat);
+        snprintf(lon_str, sizeof(lon_str), "%.6f", data.location->lon);
+        snprintf(accuracy_str, sizeof(accuracy_str), "%.1f", data.location->accuracy_m);
+
+        // sending data to database
+        if (db_push_device_location(
+                c->imei_id,
+                lat_str,
+                lon_str,
+                accuracy_str,
+                "LBS"
+            ) == 0) {
+            printf("%s LBS location pushed to database for IMEI: %s\n", 
+                   LOG_PREFIX, c->imei_id);
+        } else {
+            printf("%s Failed to push LBS location to database for IMEI: %s\n", 
+                   LOG_PREFIX, c->imei_id);
+        }
         
         // Send location data to WebSocket clients with matching IMEI
         if (c && c->has_imei_id) {
