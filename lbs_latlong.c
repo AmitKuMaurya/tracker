@@ -152,8 +152,24 @@ int lbs_query_google(LBSData *data) {
 
     // Build final URL with API key as required by Google Geolocation API
     char request_url[MAX_URL_LEN + MAX_API_KEY_LEN + 16] = {0};
-    if (strchr(google_geolocation_url, '?')) {
-        // URL already has query parameters
+    const char *key_pos = strstr(google_geolocation_url, "key=");
+    if (key_pos) {
+        // URL already has a key parameter.
+        // Two cases:
+        // 1) Placeholder like '?key=' -> append our key in place.
+        // 2) Full key already present -> use URL as-is.
+        const char *value_start = key_pos + 4; // after "key="
+        if (*value_start == '\0') {
+            // Placeholder with no value: just append our key
+            snprintf(request_url, sizeof(request_url), "%s%s",
+                     google_geolocation_url, google_api_key);
+        } else {
+            // Assume caller already provided full key; don't modify
+            snprintf(request_url, sizeof(request_url), "%s",
+                     google_geolocation_url);
+        }
+    } else if (strchr(google_geolocation_url, '?')) {
+        // URL has other query params but no key
         snprintf(request_url, sizeof(request_url), "%s&key=%s",
                  google_geolocation_url, google_api_key);
     } else {
