@@ -35,21 +35,33 @@ static int load_env_variables(void) {
     if (api_key_env && api_key_env[0] != '\0') {
         strncpy(google_api_key, api_key_env, MAX_API_KEY_LEN - 1);
         google_api_key[MAX_API_KEY_LEN - 1] = '\0';
+    } else {
+        printf("LBS_GOOGLE: GOOGLE_API_KEY not set or empty in environment\n");
     }
     
     if (url_env && url_env[0] != '\0') {
         strncpy(google_geolocation_url, url_env, MAX_URL_LEN - 1);
         google_geolocation_url[MAX_URL_LEN - 1] = '\0';
+    } else {
+        printf("LBS_GOOGLE: GOOGLE_GEOLOCATION_URL not set or empty in environment\n");
     }
     
     // If both are set from environment, we're done
     if (google_api_key[0] != '\0' && google_geolocation_url[0] != '\0') {
-        env_loaded = 1;
+        size_t key_len = strlen(google_api_key);
         printf("LBS_GOOGLE: Environment variables loaded successfully\n");
+        printf("LBS_GOOGLE: GOOGLE_GEOLOCATION_URL='%s'\n", google_geolocation_url);
+        if (key_len >= 8) {
+            printf("LBS_GOOGLE: GOOGLE_API_KEY length=%zu, prefix='%.4s', suffix='%.4s'\n",
+                   key_len, google_api_key, google_api_key + key_len - 4);
+        } else {
+            printf("LBS_GOOGLE: GOOGLE_API_KEY length=%zu (too short to show prefix/suffix)\n",
+                   key_len);
+        }
+        env_loaded = 1;
         return 0;
-    }
-    else{
-        printf("LBS_GOOGLE: Environment variables not loaded\n");
+    } else {
+        printf("LBS_GOOGLE: Environment variables not fully loaded (key or URL missing)\n");
         return -1;
     }
     
@@ -150,6 +162,14 @@ int lbs_query_google(LBSData *data) {
                  google_geolocation_url, google_api_key);
     }
 
+    size_t key_len = strlen(google_api_key);
+    printf("LBS_GOOGLE: Using Google Geolocation URL (without key): '%s'\n", google_geolocation_url);
+    printf("LBS_GOOGLE: Final request URL length=%zu (key length=%zu)\n",
+           strlen(request_url), key_len);
+    if (key_len >= 8) {
+        printf("LBS_GOOGLE: Using API key prefix='%.4s', suffix='%.4s'\n",
+               google_api_key, google_api_key + key_len - 4);
+    }
     printf("LBS_GOOGLE: Using Google Geolocation URL: %s\n", request_url);
 
     // Configure CURL for Google Geolocation API
@@ -162,6 +182,8 @@ int lbs_query_google(LBSData *data) {
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+    // Enable verbose CURL output for debugging
+    curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
     
     // Perform the request
     res = curl_easy_perform(curl);
