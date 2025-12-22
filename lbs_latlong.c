@@ -151,32 +151,20 @@ int lbs_query_google(LBSData *data) {
     MemoryBuffer response = {0};
 
     // Build final URL with API key as required by Google Geolocation API
+    // For robustness, strip any existing query string and always append ?key=YOUR_KEY
+    char base_url[MAX_URL_LEN] = {0};
     char request_url[MAX_URL_LEN + MAX_API_KEY_LEN + 16] = {0};
-    const char *key_pos = strstr(google_geolocation_url, "key=");
-    if (key_pos) {
-        // URL already has a key parameter.
-        // Two cases:
-        // 1) Placeholder like '?key=' -> append our key in place.
-        // 2) Full key already present -> use URL as-is.
-        const char *value_start = key_pos + 4; // after "key="
-        if (*value_start == '\0') {
-            // Placeholder with no value: just append our key
-            snprintf(request_url, sizeof(request_url), "%s%s",
-                     google_geolocation_url, google_api_key);
-        } else {
-            // Assume caller already provided full key; don't modify
-            snprintf(request_url, sizeof(request_url), "%s",
-                     google_geolocation_url);
-        }
-    } else if (strchr(google_geolocation_url, '?')) {
-        // URL has other query params but no key
-        snprintf(request_url, sizeof(request_url), "%s&key=%s",
-                 google_geolocation_url, google_api_key);
-    } else {
-        // No existing query parameters
-        snprintf(request_url, sizeof(request_url), "%s?key=%s",
-                 google_geolocation_url, google_api_key);
+
+    // Copy base URL and strip anything after '?'
+    strncpy(base_url, google_geolocation_url, sizeof(base_url) - 1);
+    char *qmark = strchr(base_url, '?');
+    if (qmark) {
+        *qmark = '\0';
     }
+
+    // Now always append key as the only query param
+    snprintf(request_url, sizeof(request_url), "%s?key=%s",
+             base_url, google_api_key);
 
     size_t key_len = strlen(google_api_key);
     printf("LBS_GOOGLE: Using Google Geolocation URL (without key): '%s'\n", google_geolocation_url);
