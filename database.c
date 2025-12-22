@@ -233,8 +233,9 @@ int db_push_device_location(
     }
 
     // SQL function call
+    // Note: PostgreSQL function expects: TEXT, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, TEXT
     const char *query =
-        "SELECT device_location_to_database($1, $2, $3, $4, $5)";
+        "SELECT device_location_to_database($1::text, $2::double precision, $3::double precision, $4::double precision, $5::text)";
 
     const char *params[5] = { imei_id, latitude, longitude, accuracy, source };
     int param_lengths[5] = {
@@ -246,6 +247,10 @@ int db_push_device_location(
     };
     int param_formats[5] = { 0, 0, 0, 0, 0 }; // text format
 
+    // Specify parameter types explicitly
+    // OID 25 = TEXT, OID 701 = DOUBLE PRECISION
+    Oid param_types[5] = { 25, 701, 701, 701, 25 };
+
     printf("DATABASE: Pushing location: IMEI=%s LAT=%s LON=%s ACC=%s SRC=%s\n",
            imei_id, latitude, longitude, accuracy, source);
 
@@ -253,7 +258,7 @@ int db_push_device_location(
         db_conn.conn,
         query,
         5,          // total parameters
-        NULL,       // let PostgreSQL infer datatypes
+        param_types, // specify parameter types explicitly
         params,
         param_lengths,
         param_formats,
