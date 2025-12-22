@@ -541,14 +541,19 @@ int hash_map_remove_tcp_connection(const char *imei) {
     if (device_id_copy[0] != '\0') {
         printf("WebSocket: Notifying device_id %s about going offline for IMEI %s\n", 
                device_id_copy, imei);
-        char* msg = device_online_status_json(0, imei, NULL);
-        int websocket_result = websocket_send_to_imei_id(imei, msg, strlen(msg));
-        if (websocket_result < 0) {
-            printf("WebSocket: Failed to send offline status for IMEI %s\n", imei);
+        // Use the cached device_id directly to avoid lookup races
+        char* msg = device_online_status_json(0, NULL, device_id_copy);
+        if (!msg) {
+            printf("WebSocket: Skipping offline status send because JSON message is NULL\n");
         } else {
-            printf("WebSocket: Successfully sent offline status for IMEI %s\n", imei);
+            int websocket_result = websocket_send_to_imei_id(imei, msg, strlen(msg));
+            if (websocket_result < 0) {
+                printf("WebSocket: Failed to send offline status for IMEI %s\n", imei);
+            } else {
+                printf("WebSocket: Successfully sent offline status for IMEI %s\n", imei);
+            }
+            free(msg);
         }
-        free(msg);
     }
     
     // Cleanup OUTSIDE the lock
