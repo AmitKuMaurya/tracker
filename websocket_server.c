@@ -1,20 +1,16 @@
-
+#define _GNU_SOURCE
 #include "websocket_server.h"
-
+#include "database.h"
+#include "hashmap.h"
 
 static WSServer g_ws_server = {0};
-
-// WebSocket connection management
-#define MAX_WS_CONNECTIONS 1000
-static WSConnection g_ws_connections[MAX_WS_CONNECTIONS];
-static pthread_mutex_t g_ws_connections_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Static function prototypes
 static void *websocket_server_thread(void *arg);
 static int make_socket_non_blocking(int fd);
-static int accept_websocket_connection(int server_fd);
-static int handle_websocket_handshake(int fd);
-static int handle_websocket_frame(int fd);
+static void handle_accept_ws(int server_fd);
+static int handle_websocket_handshake(WSConnection *conn);
+static int handle_websocket_frame(WSConnection *conn);
 static int contains_case_insensitive(const char *haystack, const char *needle);
 static int parse_websocket_frame(const char *buf, size_t len, 
                                 int *opcode, int *fin, 
@@ -24,48 +20,47 @@ static int create_websocket_frame(char *buf, size_t buf_len,
                                  int opcode);
 static int base64_encode(const unsigned char *input, size_t input_len, 
                         char *output, size_t output_len);
-static void remove_websocket_connection(int fd);
-static void cleanup_websocket_connection(int fd);
+static void remove_websocket_connection(WSConnection *conn);
+static void cleanup_ws_connection_callback(const char *imei, WSConnection *conn, void *ctx);
+void ws_connection_cleanup(WSConnection *ws_conn);
 bool device_online_status(const char *imei);
 
 int websocket_server_init(void) {
     memset(&g_ws_server, 0, sizeof(g_ws_server));
-    memset(g_ws_connections, 0, sizeof(g_ws_connections));
-    
+
     // Create server socket
     g_ws_server.server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (g_ws_server.server_fd == -1) {
         perror("WebSocket socket");
         return -1;
     }
-    
+
     int opt = 1;
     setsockopt(g_ws_server.server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    
+
     struct sockaddr_in addr;
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port = htons(WS_PORT);
-    
+
     if (bind(g_ws_server.server_fd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
         perror("WebSocket bind");
         close(g_ws_server.server_fd);
         return -1;
     }
-    
+
     if (listen(g_ws_server.server_fd, SOMAXCONN) == -1) {
         perror("WebSocket listen");
         close(g_ws_server.server_fd);
         return -1;
     }
-    
-    // Make server socket non-blocking
+
     if (make_socket_non_blocking(g_ws_server.server_fd) == -1) {
         perror("WebSocket make non-blocking (server)");
         close(g_ws_server.server_fd);
         return -1;
     }
-    
+
     // Create epoll instance
     g_ws_server.epoll_fd = epoll_create1(0);
     if (g_ws_server.epoll_fd == -1) {
@@ -73,7 +68,7 @@ int websocket_server_init(void) {
         close(g_ws_server.server_fd);
         return -1;
     }
-    
+
     // Add server socket to epoll
     struct epoll_event event;
     event.events = EPOLLIN | EPOLLET;
@@ -84,13 +79,8 @@ int websocket_server_init(void) {
         close(g_ws_server.server_fd);
         return -1;
     }
-    
-    // Initialize all connection slots as available
-    for (int i = 0; i < MAX_WS_CONNECTIONS; i++) {
-        g_ws_connections[i].fd = -1;
-    }
-    
-    printf("WebSocket server initialized on port %d\n", WS_PORT);
+
+    printf("WebSocket server initialized on port %d (epfd=%d)\n", WS_PORT, g_ws_server.epoll_fd);
     return 0;
 }
 
@@ -112,18 +102,35 @@ void websocket_server_stop(void) {
     if (!g_ws_server.running) {
         return;
     }
-    
+
+    printf("Stopping WebSocket server...\n");
+
+    // Stop main loop
     g_ws_server.running = 0;
     pthread_join(g_ws_server.thread_id, NULL);
-    
+
+    // Clean up any remaining WebSocket connections tracked in the hash map
+    hash_map_for_each_ws_connection(cleanup_ws_connection_callback, NULL);
+
+    // Close sockets
     close(g_ws_server.epoll_fd);
     close(g_ws_server.server_fd);
-    
-    printf("WebSocket server stopped\n");
+
+    printf("WebSocket server stopped and all connections freed.\n");
 }
 
+static void cleanup_ws_connection_callback(const char *imei, WSConnection *conn, void *ctx) {
+    (void)imei;
+    (void)ctx;
+
+    if (conn) {
+        remove_websocket_connection(conn);
+    }
+}
+
+
 static void *websocket_server_thread(void *arg) {
-    (void)arg;  // Mark parameter as unused
+    (void)arg;
     struct epoll_event events[WS_MAX_EVENTS];
     
     printf("WebSocket server thread running\n");
@@ -131,9 +138,7 @@ static void *websocket_server_thread(void *arg) {
     while (g_ws_server.running) {
         int n = epoll_wait(g_ws_server.epoll_fd, events, WS_MAX_EVENTS, 100);
         if (n == -1) {
-            if (errno == EINTR) {
-                continue;
-            }
+            if (errno == EINTR) continue;
             perror("WebSocket epoll_wait");
             break;
         }
@@ -141,64 +146,73 @@ static void *websocket_server_thread(void *arg) {
         for (int i = 0; i < n; i++) {
             if (events[i].data.fd == g_ws_server.server_fd) {
                 // New connection
-                while (accept_websocket_connection(g_ws_server.server_fd) == 0) {
-                    // Continue accepting until no more connections
-                }
+                handle_accept_ws(g_ws_server.server_fd);
             } else {
                 // Client connection
-                int fd = events[i].data.fd;
-                
-                pthread_mutex_lock(&g_ws_connections_mutex);
-                WSConnection *conn = NULL;
-                for (int j = 0; j < MAX_WS_CONNECTIONS; j++) {
-                    if (g_ws_connections[j].fd == fd) {
-                        conn = &g_ws_connections[j];
-                        break;
-                    }
-                }
-                pthread_mutex_unlock(&g_ws_connections_mutex);
-                
-                if (!conn) {
-                    printf("WebSocket: Unknown connection fd=%d\n", fd);
-                    close(fd);
+                EventData_W *event_data = (EventData_W *)events[i].data.ptr;
+                if (!event_data) {
+                    fprintf(stderr, "WebSocket: Invalid event data (NULL pointer)\n");
                     continue;
                 }
                 
-                if (events[i].events & EPOLLIN) {
-                    // Data available to read
-                    if (conn->state == WS_STATE_HANDSHAKE) {
-                        if (handle_websocket_handshake(fd) == 0) {
-                            conn->state = WS_STATE_OPEN;
-                            printf("WebSocket: Handshake complete for fd=%d\n", fd);
-                            // Check online status and send appropriate message
-                        if (device_online_status(conn->imei)) {
-                            char* device_status_msg = device_online_status_json(1);  // here 1 mean device is online
-                                websocket_send_to_imei(conn->imei, device_status_msg, strlen(device_status_msg));
-                                free(device_status_msg);
-                            printf("WebSocket: IMEI %s is online\n", conn->imei);
-                        } else {
-                            char* device_status_msg = device_online_status_json(0);  // here 0 mean device is offline
-                            websocket_send_to_imei(conn->imei,"device is offline", strlen("device is offline"));
-                            websocket_send_to_imei(conn->imei, device_status_msg, strlen(device_status_msg));
-                            printf("device status online payload: %s\n",device_status_msg);
-                            free(device_status_msg);
-                            printf("WebSocket: IMEI %s is offline\n", conn->imei);
-                        }
-                        } else {
-                            printf("WebSocket: Handshake failed for fd=%d\n", fd);
-                            remove_websocket_connection(fd);
-                        }
-                    } else if (conn->state == WS_STATE_OPEN) {
-                        if (handle_websocket_frame(fd) != 0) {
-                            printf("WebSocket: Frame handling failed for fd=%d\n", fd);
-                            remove_websocket_connection(fd);
-                        }
-                    }
+                WSConnection *conn = event_data->ws_conn;
+                if (!conn) {
+                    fprintf(stderr, "WebSocket: Event with NULL connection pointer\n");
+                    continue;
                 }
                 
-                if (events[i].events & (EPOLLERR | EPOLLHUP)) {
-                    printf("WebSocket: Error or hangup on fd=%d\n", fd);
-                    remove_websocket_connection(fd);
+                // Check for errors/hangup first
+                if (events[i].events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
+                    printf("WebSocket: Error or hangup on fd=%d\n", conn->fd);
+                    remove_websocket_connection(conn);
+                    continue;
+                }
+                
+                // Handle readable events
+                if (events[i].events & EPOLLIN) {
+                    if (conn->state == WS_STATE_HANDSHAKE) {
+                        int handshake_result = handle_websocket_handshake(conn);
+                        if (handshake_result == 0) {
+                            conn->state = WS_STATE_OPEN;
+                            printf("WebSocket: Handshake complete for fd=%d\n", conn->fd);
+
+                            //After successful handshake, sending device validation success
+                            printf("WebSocket: Sending device validation for device_id %s\n", conn->device_id);
+                            char * device_validation_msg = device_validation_json(conn->device_id, 1);
+                            if (device_validation_msg) {
+                                websocket_send_to_imei_id(conn->imei, device_validation_msg, strlen(device_validation_msg));
+                                free(device_validation_msg);
+                            }
+
+                            // After successful handshake, send device online status
+                            printf("WebSocket: Sending online status for device_id %s\n", conn->device_id);
+                            int is_online = device_online_status(conn->imei) ? 1 : 0;
+                            char *device_status_msg = device_online_status_json(is_online, NULL, conn->device_id[0] ? conn->device_id : NULL);
+                            if (device_status_msg) {
+                                websocket_send_to_imei_id(conn->imei, device_status_msg, strlen(device_status_msg));
+                                free(device_status_msg);
+                            }
+                        } else if (handshake_result == -2){
+                            // Handshake failed due to invalid device_id
+                            printf("WebSocket: Invalid device_id for fd=%d\n", conn->fd);
+                            // Sending device validation failure
+                            char * device_validation_msg = device_validation_json(conn->device_id, 0);
+                            if (device_validation_msg) {
+                                websocket_send_direct(conn, device_validation_msg, strlen(device_validation_msg));
+                                free(device_validation_msg);
+                            }
+                            remove_websocket_connection(conn);
+                        }
+                        else {
+                            printf("WebSocket: Handshake failed for fd=%d\n", conn->fd);
+                            remove_websocket_connection(conn);
+                        }
+                    } else if (conn->state == WS_STATE_OPEN) {
+                        if (handle_websocket_frame(conn) != 0) {
+                            printf("WebSocket: Frame handling failed for fd=%d\n", conn->fd);
+                            remove_websocket_connection(conn);
+                        }
+                    }
                 }
             }
         }
@@ -207,88 +221,92 @@ static void *websocket_server_thread(void *arg) {
     return NULL;
 }
 
-static int accept_websocket_connection(int server_fd) {
-    struct sockaddr_in in_addr;
-    socklen_t in_len = sizeof(in_addr);
-    int fd = accept(server_fd, (struct sockaddr *)&in_addr, &in_len);
-    
-    if (fd == -1) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+static void handle_accept_ws(int server_fd) {
+    while (1) {
+        struct sockaddr_in in_addr;
+        socklen_t in_len = sizeof(in_addr);
+        int infd = accept(server_fd, (struct sockaddr *)&in_addr, &in_len);
+        
+        if (infd == -1) {
+            if ((errno == EAGAIN) || (errno == EWOULDBLOCK)) break;
             perror("WebSocket accept");
-        }
-        return -1;
-    }
-    
-    if (make_socket_non_blocking(fd) == -1) {
-        close(fd);
-        return -1;
-    }
-    
-    // Find free connection slot
-    pthread_mutex_lock(&g_ws_connections_mutex);
-    int slot = -1;
-    for (int i = 0; i < MAX_WS_CONNECTIONS; i++) {
-        if (g_ws_connections[i].fd == -1) {
-            slot = i;
             break;
         }
+
+        make_socket_non_blocking(infd);
+
+        // ✅ Dynamically allocate WSConnection
+        WSConnection *ws_conn = calloc(1, sizeof(WSConnection));
+        if (!ws_conn) {
+            fprintf(stderr, "WebSocket: calloc failed\n");
+            close(infd);
+            continue;
+        }
+        
+        // Initialize connection
+        ws_conn->fd = infd;
+        ws_conn->state = WS_STATE_HANDSHAKE;
+        ws_conn->has_imei = 0;
+        ws_conn->imei[0] = '\0';
+        ws_conn->has_device_id = 0;
+        ws_conn->device_id[0] = '\0';
+        ws_conn->write_buf = NULL;
+        ws_conn->write_buf_len = 0;
+        ws_conn->write_buf_used = 0;
+        ws_conn->cleanup_in_progress = 0;
+        ws_conn->epfd = g_ws_server.epoll_fd;  // ✅ Store epoll fd
+
+        // ✅ Create EventData for epoll
+        EventData_W *event_data = malloc(sizeof(EventData_W));
+        if (!event_data) {
+            fprintf(stderr, "WebSocket: Failed to allocate event data\n");
+            free(ws_conn);
+            close(infd);
+            continue;
+        }
+        event_data->ws_conn = ws_conn;
+        event_data->event_type = EVENT_TYPE_SOCKET_W;
+        ws_conn->socket_event_data = event_data;
+        
+        // Add to epoll
+        struct epoll_event event;
+        event.data.ptr = event_data;  // ✅ Use ptr, not fd
+        event.events = EPOLLIN | EPOLLET | EPOLLRDHUP;
+        if (epoll_ctl(g_ws_server.epoll_fd, EPOLL_CTL_ADD, infd, &event) == -1) {
+            perror("WebSocket epoll_ctl: client");
+            free(event_data);
+            free(ws_conn);
+            close(infd);
+            continue;
+        }
+        
+        printf("WebSocket: New connection accepted fd=%d (epfd=%d)\n", infd, g_ws_server.epoll_fd);
     }
-    
-    if (slot == -1) {
-        pthread_mutex_unlock(&g_ws_connections_mutex);
-        printf("WebSocket: Max connections reached\n");
-        close(fd);
-        return -1;
-    }
-    
-    // Initialize connection
-    g_ws_connections[slot].fd = fd;
-    g_ws_connections[slot].state = WS_STATE_HANDSHAKE;
-    g_ws_connections[slot].has_imei = 0;
-    g_ws_connections[slot].imei[0] = '\0';
-    g_ws_connections[slot].write_buf = NULL;
-    g_ws_connections[slot].write_buf_len = 0;
-    g_ws_connections[slot].write_buf_used = 0;
-    
-    pthread_mutex_unlock(&g_ws_connections_mutex);
-    
-    // Add to epoll
-    struct epoll_event event;
-    event.events = EPOLLIN | EPOLLET | EPOLLRDHUP;
-    event.data.fd = fd;
-    if (epoll_ctl(g_ws_server.epoll_fd, EPOLL_CTL_ADD, fd, &event) == -1) {
-        perror("WebSocket epoll_ctl: client");
-        cleanup_websocket_connection(fd);
-        return -1;
-    }
-    
-    printf("WebSocket: New connection accepted fd=%d\n", fd);
-    return 0;
 }
 
-static int handle_websocket_handshake(int fd) {
+static int handle_websocket_handshake(WSConnection *conn) {
     char buf[WS_BUF_SIZE];
-    ssize_t len = recv(fd, buf, sizeof(buf) - 1, MSG_DONTWAIT);
+    ssize_t len = recv(conn->fd, buf, sizeof(buf) - 1, 0);
     if (len <= 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) return 1;
-        printf("WebSocket: recv failed in handshake: %s\n", strerror(errno));
+        if (len == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            return 1; // Try again later
+        }
         return -1;
     }
 
     buf[len] = '\0';
-    printf("WebSocket: Received handshake request:\n%s\n", buf);
+    printf("WebSocket: Received handshake request from fd=%d\n", conn->fd);
 
     if (strncmp(buf, "GET ", 4) != 0) {
         printf("WebSocket: Not a GET request\n");
         return -1;
     }
 
-    // Keep an untouched copy for later parsing
+    // Extract device_id from URL
     char original_buf[WS_BUF_SIZE];
     strncpy(original_buf, buf, sizeof(original_buf) - 1);
     original_buf[sizeof(original_buf) - 1] = '\0';
 
-    // Extract IMEI from the request line
     char *request_line_end = strstr(buf, "\r\n");
     if (request_line_end) *request_line_end = '\0';
     char *space1 = strchr(buf, ' ');
@@ -298,30 +316,32 @@ static int handle_websocket_handshake(int fd) {
         return -1;
     }
     *space2 = '\0';
-    const char *url = space1 + 1; // "/ws?imei=..."
-    const char *imei_q = strstr(url, "imei=");
-    char normalized_imei[32] = {0};
-    if (imei_q) {
-        imei_q += 5;
-        const char *amp = strchr(imei_q, '&');
-        size_t imei_len = amp ? (size_t)(amp - imei_q) : strlen(imei_q);
-        if (imei_len >= sizeof(normalized_imei)) imei_len = sizeof(normalized_imei) - 1;
-        char imei_tmp[32];
-        strncpy(imei_tmp, imei_q, imei_len);
-        imei_tmp[imei_len] = '\0';
-        size_t tmp_len = strlen(imei_tmp);
-        const char *last15 = (tmp_len > 15) ? (imei_tmp + (tmp_len - 15)) : imei_tmp;
-        snprintf(normalized_imei, sizeof(normalized_imei), "%s", last15);
+    const char *url = space1 + 1;
+    const char *device_id_q = strstr(url, "device_id=");
+    char normalized_device_id[32] = {0};
+    if (device_id_q) {
+        device_id_q += 10;
+        const char *amp = strchr(device_id_q, '&');
+        size_t device_id_len = amp ? (size_t)(amp - device_id_q) : strlen(device_id_q);
+        if (device_id_len >= sizeof(normalized_device_id)) device_id_len = sizeof(normalized_device_id) - 1;
+        char device_id_tmp[32];
+        strncpy(device_id_tmp, device_id_q, device_id_len);
+        device_id_tmp[device_id_len] = '\0';
+        size_t tmp_len = strlen(device_id_tmp);
+        const size_t KEEP = 9;
+        const char *last = (tmp_len > KEEP) ? device_id_tmp + (tmp_len - KEEP) : device_id_tmp;
+        snprintf(normalized_device_id, sizeof normalized_device_id, "%s", last);
+        printf("WebSocket: Extracted device_id=%s\n", normalized_device_id);
     }
 
-    // Now parse headers (use original_buf since buf was modified)
+    // Parse headers
     int upgrade_found = 0;
     int connection_found = 0;
     char client_key[256] = {0};
 
     char *headers = strstr(original_buf, "\r\n");
     if (!headers) return -1;
-    headers += 2; // Move past request line CRLF
+    headers += 2;
 
     char *line = strtok(headers, "\r\n");
     while (line) {
@@ -339,21 +359,13 @@ static int handle_websocket_handshake(int fd) {
     }
 
     if (!upgrade_found || !connection_found || client_key[0] == '\0') {
-        printf("WebSocket: Missing required headers (Upgrade/Connection/Key)\n");
+        printf("WebSocket: Missing required headers\n");
         return -1;
     }
 
     // Create Sec-WebSocket-Accept
     char combined_key[256];
-    size_t ck_len = strlen(client_key);
-    size_t magic_len = strlen(WS_MAGIC_STRING);
-    if (ck_len + magic_len >= sizeof(combined_key)) {
-        printf("WebSocket: Sec-WebSocket-Key too long\n");
-        return -1;
-    }
-    memcpy(combined_key, client_key, ck_len);
-    memcpy(combined_key + ck_len, WS_MAGIC_STRING, magic_len);
-    combined_key[ck_len + magic_len] = '\0';
+    snprintf(combined_key, sizeof(combined_key), "%s%s", client_key, WS_MAGIC_STRING);
     unsigned char sha1_hash[SHA_DIGEST_LENGTH];
     SHA1((unsigned char *)combined_key, strlen(combined_key), sha1_hash);
     char accept_key[256];
@@ -368,30 +380,56 @@ static int handle_websocket_handshake(int fd) {
         "Sec-WebSocket-Accept: %s\r\n"
         "\r\n",
         accept_key);
-    ssize_t sent = send(fd, response, resp_len, 0);
+    ssize_t sent = send(conn->fd, response, resp_len, 0);
     if (sent != resp_len) {
-        printf("WebSocket: Failed to send complete response: %zd/%d bytes\n", sent, resp_len);
+        printf("WebSocket: Failed to send complete response\n");
         return -1;
     }
 
-    // Store IMEI on the connection if available
-    if (normalized_imei[0] != '\0') {
-        pthread_mutex_lock(&g_ws_connections_mutex);
-        for (int i = 0; i < MAX_WS_CONNECTIONS; i++) {
-            if (g_ws_connections[i].fd == fd) {
-                strncpy(g_ws_connections[i].imei, normalized_imei, sizeof(g_ws_connections[i].imei) - 1);
-                g_ws_connections[i].imei[sizeof(g_ws_connections[i].imei) - 1] = '\0';
-                g_ws_connections[i].has_imei = 1;
-                break;
-            }
+    // Store device_id on connection
+    if (normalized_device_id[0] != '\0') {
+        strncpy(conn->device_id, normalized_device_id, sizeof(conn->device_id) - 1);
+        conn->device_id[sizeof(conn->device_id) - 1] = '\0';
+        conn->has_device_id = 1;
+    }
+
+    // Get IMEI from database
+    const char* imei_id = db_get_imei_id(normalized_device_id);
+    if (imei_id) {
+        // char * device_validation_msg = device_validation_json(normalized_device_id, 1);
+        // if (device_validation_msg) {
+        //     websocket_send_to_device_id(normalized_device_id, device_validation_msg, strlen(device_validation_msg));
+        //     free(device_validation_msg);
+        // }
+        strncpy(conn->imei, imei_id, sizeof(conn->imei) - 1);
+        conn->imei[sizeof(conn->imei) - 1] = '\0';
+        conn->has_imei = 1;
+        
+        // ✅ Register WebSocket connection in hashmap
+        hash_map_set_ws_connection(imei_id, conn, conn->fd);
+        
+        printf("WebSocket: Mapped device_id %s to IMEI %s\n", normalized_device_id, imei_id);
+        
+        // Send online status
+        // int is_online = device_online_status(imei_id) ? 1 : 0;
+        // char *device_status_msg = device_online_status_json(is_online, NULL, normalized_device_id[0] ? normalized_device_id : NULL);
+        // if (device_status_msg) {
+        //     websocket_send_to_imei_id(imei_id, device_status_msg, strlen(device_status_msg));
+        //     free(device_status_msg);
+        // }
+    } else {
+        char * device_validation_msg = device_validation_json(normalized_device_id, 0); 
+        if (device_validation_msg) {
+            websocket_send_direct(conn, device_validation_msg, strlen(device_validation_msg));
+            free(device_validation_msg);
         }
-        pthread_mutex_unlock(&g_ws_connections_mutex);
+        printf("WebSocket: No IMEI mapping found for device_id so invalid device_id %s\n", normalized_device_id);
+        return -2; // Indicate invalid device_id
     }
 
     return 0;
 }
 
-// Simple case-insensitive substring check to avoid non-standard strcasestr
 static int contains_case_insensitive(const char *haystack, const char *needle) {
     if (!haystack || !needle || !*needle) return 0;
     size_t nlen = strlen(needle);
@@ -405,9 +443,9 @@ static int contains_case_insensitive(const char *haystack, const char *needle) {
     return 0;
 }
  
-static int handle_websocket_frame(int fd) {
+static int handle_websocket_frame(WSConnection *conn) {
     char buf[WS_BUF_SIZE];
-    ssize_t len = recv(fd, buf, sizeof(buf), 0);
+    ssize_t len = recv(conn->fd, buf, sizeof(buf), 0);
     
     if (len <= 0) {
         return -1;
@@ -424,104 +462,188 @@ static int handle_websocket_frame(int fd) {
     switch (opcode) {
         case WS_OP_TEXT:
         case WS_OP_BINARY:
-            // Handle incoming data if needed
-            printf("WebSocket: Received %zd bytes from fd=%d\n", payload_len, fd);
+            printf("WebSocket: Received %zd bytes from fd=%d\n", payload_len, conn->fd);
             break;
             
         case WS_OP_CLOSE:
-            printf("WebSocket: Close frame received from fd=%d\n", fd);
-            remove_websocket_connection(fd);
+            printf("WebSocket: Close frame received from fd=%d\n", conn->fd);
+            remove_websocket_connection(conn);
             break;
             
         case WS_OP_PING:
-            // Respond with pong
             {
                 char pong_frame[WS_BUF_SIZE];
                 int frame_len = create_websocket_frame(pong_frame, sizeof(pong_frame), 
                                                      payload, payload_len, WS_OP_PONG);
                 if (frame_len > 0) {
-                    send(fd, pong_frame, frame_len, 0);
+                    send(conn->fd, pong_frame, frame_len, 0);
                 }
             }
             break;
             
         case WS_OP_PONG:
-            // No action needed
             break;
             
         default:
-            printf("WebSocket: Unknown opcode %d from fd=%d\n", opcode, fd);
+            printf("WebSocket: Unknown opcode %d from fd=%d\n", opcode, conn->fd);
             break;
     }
     
     return 0;
 }
 
-int websocket_send_to_imei(const char *imei, const char *data, size_t len) {
-    if (!imei || !data || len == 0) {
+// ✅ This is ONLY called by hashmap when cleaning up the entry
+// It should NOT free the WSConnection - that's done by remove_websocket_connection
+void ws_connection_cleanup(WSConnection *ws_conn) {
+    if (!ws_conn) return;
+    if (ws_conn->cleanup_in_progress) return;
+    printf("HASHMAP CALLBACK: ws_connection_cleanup for fd=%d\n", ws_conn->fd);
+    ws_conn->cleanup_in_progress = 1;
+    // ✅ If the connection is still alive (not cleaned up by epoll thread),
+    // we need to clean it up now
+    if (ws_conn->fd != -1) {
+        // Remove from epoll
+        if (ws_conn->epfd != -1) {
+            epoll_ctl(ws_conn->epfd, EPOLL_CTL_DEL, ws_conn->fd, NULL);
+        }
+        
+        // Close socket
+        close(ws_conn->fd);
+        ws_conn->fd = -1;
+    }
+    
+    // Free write buffer if still allocated
+    if (ws_conn->write_buf) {
+        free(ws_conn->write_buf);
+        ws_conn->write_buf = NULL;
+    }
+    
+    // Free event data if still allocated
+    if (ws_conn->socket_event_data) {
+        free(ws_conn->socket_event_data);
+        ws_conn->socket_event_data = NULL;
+    }
+    
+    
+    printf("HASHMAP CALLBACK: ws_connection_cleanup completed\n");
+}
+
+static void remove_websocket_connection(WSConnection *conn) {
+    if (!conn) return;
+    
+    // ✅ Prevent double cleanup
+    if (conn->fd == -1) {
+        printf("WebSocket: Connection already cleaned up\n");
+        return;
+    }
+    
+    int fd_backup = conn->fd; // For logging
+    
+    printf("WebSocket: Removing connection fd=%d\n", fd_backup);
+    
+    // ✅ Mark as cleaned FIRST to prevent race conditions
+    conn->cleanup_in_progress = 1;
+    
+    // ✅ STEP 1: Notify hashmap
+    if (conn->has_imei && conn->imei[0] != '\0') {
+        fd_map_remove_ws(conn->fd);
+        hash_map_remove_ws_connection(conn->imei);
+    }
+    
+    // ✅ STEP 2: Clean up resources
+    if (conn->epfd != -1 && conn->fd != -1) {
+        epoll_ctl(conn->epfd, EPOLL_CTL_DEL, conn->fd, NULL);
+    }
+    
+    if (conn->fd != -1) {
+        close(conn->fd);
+        conn->fd = -1; // ✅ Mark as closed
+    }
+    
+    if (conn->write_buf) {
+        free(conn->write_buf);
+        conn->write_buf = NULL;
+    }
+    
+    if (conn->socket_event_data) {
+        free(conn->socket_event_data);
+        conn->socket_event_data = NULL;
+    }
+    
+    // ✅ STEP 3: Free the structure
+    free(conn);
+    
+    printf("WebSocket: Connection cleanup completed for fd=%d\n", fd_backup);
+}
+
+int websocket_send_to_imei_id(const char *imei_id, const char *data, size_t len) {
+    if (!imei_id || !data || len == 0) {
         return -1;
     }
     
-    pthread_mutex_lock(&g_ws_connections_mutex);
+    // ✅ Get WS connection from hashmap
+    WSConnection *ws_conn = (WSConnection *)hash_map_get_ws_connection(imei_id);
+    if (!ws_conn) {
+        printf("WebSocket: No connection found for IMEI %s\n", imei_id);
+        return -1;
+    }
     
-    int count = 0;
-    for (int i = 0; i < MAX_WS_CONNECTIONS; i++) {
-        if (g_ws_connections[i].fd != -1 && 
-            g_ws_connections[i].has_imei &&
-            strcmp(g_ws_connections[i].imei, imei) == 0) {
-            
-            char frame[WS_BUF_SIZE];
-            int frame_len = create_websocket_frame(frame, sizeof(frame), data, len, WS_OP_TEXT);
-            
-            if (frame_len > 0) {
-                ssize_t sent = send(g_ws_connections[i].fd, frame, frame_len, 0);
-                if (sent == frame_len) {
-                    count++;
-                } else {
-                    printf("WebSocket: Failed to send data to fd=%d\n", g_ws_connections[i].fd);
-                }
-            }
+    if (ws_conn->state != WS_STATE_OPEN || ws_conn->cleanup_in_progress) {
+        printf("WebSocket: Connection not ready for IMEI %s\n", imei_id);
+        return -1;
+    }
+    
+    char frame[WS_BUF_SIZE];
+    int frame_len = create_websocket_frame(frame, sizeof(frame), data, len, WS_OP_TEXT);
+    
+    if (frame_len > 0) {
+        ssize_t sent = send(ws_conn->fd, frame, frame_len, 0);
+        if (sent == frame_len) {
+            printf("WebSocket: Sent %zd bytes to IMEI %s (fd=%d)\n", len, imei_id, ws_conn->fd);
+            return 1;
+        } else {
+            printf("WebSocket: Failed to send data to fd=%d\n", ws_conn->fd);
         }
     }
     
-    pthread_mutex_unlock(&g_ws_connections_mutex);
-    
-    return count;
+    return 0;
 }
+
+int websocket_send_direct(WSConnection *conn, const char *data, size_t len) {
+    if (!conn || !data || conn->state != WS_STATE_OPEN || conn->cleanup_in_progress) {
+        return -1;
+    }
+
+    char frame[WS_BUF_SIZE];
+    int frame_len = create_websocket_frame(frame, sizeof(frame), data, len, WS_OP_TEXT);
+
+    if (frame_len <= 0) return -1;
+
+    ssize_t sent = send(conn->fd, frame, frame_len, 0);
+    if (sent == frame_len) {
+        printf("WebSocket: Sent %zd bytes directly to fd=%d\n", len, conn->fd);
+        return 1;
+    }
+
+    printf("WebSocket: Failed to send direct message to fd=%d\n", conn->fd);
+    return -1;
+}
+
 
 int websocket_broadcast(const char *data, size_t len) {
     if (!data || len == 0) {
         return -1;
     }
     
-    pthread_mutex_lock(&g_ws_connections_mutex);
-    
-    int count = 0;
-    for (int i = 0; i < MAX_WS_CONNECTIONS; i++) {
-        if (g_ws_connections[i].fd != -1 && g_ws_connections[i].state == WS_STATE_OPEN) {
-            char frame[WS_BUF_SIZE];
-            int frame_len = create_websocket_frame(frame, sizeof(frame), data, len, WS_OP_TEXT);
-            
-            if (frame_len > 0) {
-                ssize_t sent = send(g_ws_connections[i].fd, frame, frame_len, 0);
-                if (sent == frame_len) {
-                    count++;
-                }
-            }
-        }
-    }
-    
-    pthread_mutex_unlock(&g_ws_connections_mutex);
-    
-    return count;
+    // TODO: Implement broadcast using hashmap iteration
+    printf("WebSocket: Broadcast not yet implemented with dynamic allocation\n");
+    return 0;
 }
 
 static int parse_websocket_frame(const char *buf, size_t len, 
                                 int *opcode, int *fin, 
                                 char *payload, size_t *payload_len) {
-    if (len < 2) {
-        return -1;
-    }
+    if (len < 2) return -1;
     
     unsigned char byte1 = buf[0];
     unsigned char byte2 = buf[1];
@@ -534,29 +656,23 @@ static int parse_websocket_frame(const char *buf, size_t len,
     size_t header_size = 2;
     
     if (payload_length == 126) {
-        if (len < 4) {
-            return -1;
-        }
+        if (len < 4) return -1;
         payload_length = (buf[2] << 8) | buf[3];
         header_size += 2;
     } else if (payload_length == 127) {
-        if (len < 10) {
-            return -1;
-        }
-        // For simplicity, we assume payload length fits in 32 bits
+        if (len < 10) return -1;
         payload_length = (buf[2] << 24) | (buf[3] << 16) | (buf[4] << 8) | buf[5];
         header_size += 8;
     }
     
     if (masked) {
-        header_size += 4; // Masking key
+        header_size += 4;
     }
     
     if (len < header_size + payload_length) {
         return -1;
     }
     
-    // Extract payload
     if (masked) {
         const unsigned char *masking_key = (const unsigned char *)buf + header_size - 4;
         for (size_t i = 0; i < payload_length; i++) {
@@ -573,12 +689,10 @@ static int parse_websocket_frame(const char *buf, size_t len,
 static int create_websocket_frame(char *buf, size_t buf_len, 
                                  const char *payload, size_t payload_len, 
                                  int opcode) {
-    if (buf_len < payload_len + 10) {
-        return -1;
-    }
+    if (buf_len < payload_len + 10) return -1;
     
     int header_size = 2;
-    buf[0] = 0x80 | opcode; // FIN bit set + opcode
+    buf[0] = 0x80 | opcode;
     
     if (payload_len <= 125) {
         buf[1] = payload_len;
@@ -589,7 +703,6 @@ static int create_websocket_frame(char *buf, size_t buf_len,
         header_size += 2;
     } else {
         buf[1] = 127;
-        // For simplicity, assume payload length fits in 32 bits
         buf[2] = 0;
         buf[3] = 0;
         buf[4] = 0;
@@ -624,46 +737,18 @@ static int base64_encode(const unsigned char *input, size_t input_len, char *out
     BIO_flush(b64);
     BIO_get_mem_ptr(b64, &bptr);
 
-    // Get the encoded length
     long length = BIO_get_mem_data(bmem, NULL);
     if (length < 0 || (size_t)length + 1 > output_len) {
         BIO_free_all(b64);
         return -1;
     }
 
-    // Get the encoded data
     char *data;
     BIO_get_mem_data(bmem, &data);
     memcpy(output, data, length);
     output[length] = '\0';
     BIO_free_all(b64);
     return (int)length;
-}
-
-static void remove_websocket_connection(int fd) {
-    pthread_mutex_lock(&g_ws_connections_mutex);
-    cleanup_websocket_connection(fd);
-    pthread_mutex_unlock(&g_ws_connections_mutex);
-}
-
-static void cleanup_websocket_connection(int fd) {
-    for (int i = 0; i < MAX_WS_CONNECTIONS; i++) {
-        if (g_ws_connections[i].fd == fd) {
-            printf("WebSocket: Cleaning up connection fd=%d, IMEI=%s\n", 
-                   fd, g_ws_connections[i].has_imei ? g_ws_connections[i].imei : "unknown");
-            
-            epoll_ctl(g_ws_server.epoll_fd, EPOLL_CTL_DEL, fd, NULL);
-            close(fd);
-            
-            if (g_ws_connections[i].write_buf) {
-                free(g_ws_connections[i].write_buf);
-            }
-            
-            memset(&g_ws_connections[i], 0, sizeof(WSConnection));
-            g_ws_connections[i].fd = -1;
-            break;
-        }
-    }
 }
 
 static int make_socket_non_blocking(int fd) {
@@ -674,12 +759,7 @@ static int make_socket_non_blocking(int fd) {
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
-
-
 bool device_online_status(const char *imei) {
     if (!imei) return false;
-    
-    // Also check if there's a TCP connection in the login map
-    
-    return (login_map_get(imei) != NULL);
+    return hash_map_is_device_online(imei);
 }

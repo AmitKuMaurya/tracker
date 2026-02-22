@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 /**
  * @file gps_data.c
  * @brief Implementation file for GPS data processing module
@@ -18,6 +19,7 @@
 #include <sys/socket.h>
 #include "gps_data.h"
 #include "websocket_server.h"
+#include "hashmap.h"
 #include "json_writer.h"
 
 /* Constants */
@@ -38,8 +40,8 @@ void process_gps_command(Conn *c, const unsigned char *cmd, int len) {
         return;
     }
     
-    // Validate packet
-    if (validate_gps_packet(cmd, len) != 0) {
+    if (len < GPS_MIN_PACKET_LENGTH) {
+        printf("%s: Invalid GPS packet length: %d\n", GPS_LOG_PREFIX, len);
         return;
     }
     
@@ -59,10 +61,10 @@ void process_gps_command(Conn *c, const unsigned char *cmd, int len) {
     unsigned char gps_info = cmd[10];
     gps_data.gps_data_length = (gps_info >> 4) & 0x0F;
     gps_data.satellite_count = gps_info & 0x0F;
-    
+
     // Check positioning status from status bytes
     gps_data.is_positioned = is_gps_positioned(cmd + 20);
-    
+
     if (!gps_data.is_positioned) {
         printf("%s: GPS not positioned, skipping coordinate processing\n", GPS_LOG_PREFIX);
         
@@ -101,21 +103,44 @@ void process_gps_command(Conn *c, const unsigned char *cmd, int len) {
     }
     
     // Send location data to WebSocket clients with matching IMEI
-    if (c && c->has_login_id && gps_data.is_positioned) {
-        char *ws_message = create_websocket_gps_message(c->login_id, &gps_data);
+    if (c && c->has_imei_id && gps_data.is_positioned) {
+        //send location to databse
+        const char *GPS_LOG_PREFIX = "GPS_DATA";
+        const char *accuracy_str = "10m"; // Default accuracy for GPS
+        char lat_str[32];
+        char lon_str[32];
+        snprintf(lat_str, sizeof(lat_str), "%.6f", gps_data.latitude);
+        snprintf(lon_str, sizeof(lon_str), "%.6f", gps_data.longitude);
+        if (db_push_device_location(
+                c->imei_id,
+                lat_str,
+                lon_str,
+                accuracy_str,
+                "GPS"
+        ) == 0) {
+            printf("%s GPS location pushed to database for IMEI: %s\n", 
+                   GPS_LOG_PREFIX, c->imei_id);
+        } else {
+            printf("%s Failed to push GPS location to database for IMEI: %s\n", 
+                   GPS_LOG_PREFIX, c->imei_id);
+        }
+
+        char *ws_message = create_websocket_gps_message(c->imei_id, &gps_data);
         if (ws_message) {
-            int sent_count = websocket_send_to_imei(c->login_id, ws_message, strlen(ws_message));
+            // Get device_id for this IMEI and send to device_id
+            int sent_count;
+            sent_count = websocket_send_to_imei_id(c->imei_id, ws_message, strlen(ws_message));
             if (sent_count > 0) {
                 printf("%s Sent GPS location to %d WebSocket client(s) for IMEI: %s\n", 
-                       GPS_LOG_PREFIX, sent_count, c->login_id);
+                       GPS_LOG_PREFIX, sent_count, c->imei_id);
             } else {
                 printf("%s No WebSocket clients found for IMEI: %s\n", 
-                       GPS_LOG_PREFIX, c->login_id);
+                       GPS_LOG_PREFIX, c->imei_id);
             }
             free(ws_message);
         } else {
             printf("%s Failed to create WebSocket GPS message for IMEI: %s\n", 
-                   GPS_LOG_PREFIX, c->login_id);
+                   GPS_LOG_PREFIX, c->imei_id);
         }
     }
 }
@@ -125,13 +150,13 @@ int parse_gps_datetime(const unsigned char *cmd, GPSData *gps_data) {
         return -1;
     }
     
-    // Parse BCD encoded datetime: YY MM DD HH MM SS
-    gps_data->year = (cmd[0] >> 4) * 10 + (cmd[0] & 0x0F) + 2000;
-    gps_data->month = (cmd[1] >> 4) * 10 + (cmd[1] & 0x0F);
-    gps_data->day = (cmd[2] >> 4) * 10 + (cmd[2] & 0x0F);
-    gps_data->hour = (cmd[3] >> 4) * 10 + (cmd[3] & 0x0F);
-    gps_data->minute = (cmd[4] >> 4) * 10 + (cmd[4] & 0x0F);
-    gps_data->second = (cmd[5] >> 4) * 10 + (cmd[5] & 0x0F);
+    // Parse as direct hex values (not BCD)
+    gps_data->year = cmd[0] + 2000;    // Direct hex + 2000
+    gps_data->month = cmd[1];          // Direct hex value
+    gps_data->day = cmd[2];            // Direct hex value  
+    gps_data->hour = cmd[3];           // Direct hex value
+    gps_data->minute = cmd[4];         // Direct hex value
+    gps_data->second = cmd[5];         // Direct hex value
     
     // Validate datetime ranges
     if (gps_data->year < 2000 || gps_data->year > 2099 ||
@@ -146,6 +171,7 @@ int parse_gps_datetime(const unsigned char *cmd, GPSData *gps_data) {
     
     return 0;
 }
+
 
 int parse_gps_coordinates(const unsigned char *cmd, GPSData *gps_data) {
     if (!cmd || !gps_data) {
@@ -189,32 +215,6 @@ int parse_gps_status(const unsigned char *cmd, GPSData *gps_data) {
     return 0;
 }
 
-int validate_gps_packet(const unsigned char *cmd, int len) {
-    if (!cmd) {
-        printf("%s: NULL command buffer\n", GPS_LOG_PREFIX);
-        return -1;
-    }
-    
-    if (len < GPS_MIN_PACKET_LENGTH) {
-        printf("%s: GPS packet too short: %d bytes (minimum: %d)\n", 
-               GPS_LOG_PREFIX, len, GPS_MIN_PACKET_LENGTH);
-        return -1;
-    }
-    
-    // Validate header
-    if (cmd[0] != 0x78 || cmd[1] != 0x78) {
-        printf("%s: Invalid GPS packet header\n", GPS_LOG_PREFIX);
-        return -1;
-    }
-    
-    // Validate terminator
-    if (cmd[len-2] != 0x0D || cmd[len-1] != 0x0A) {
-        printf("%s: Invalid GPS packet terminator\n", GPS_LOG_PREFIX);
-        return -1;
-    }
-    
-    return 0;
-}
 
 int send_gps_response(Conn *c, unsigned char protocol, const GPSData *gps_data) {
     if (!c || !gps_data) {
@@ -276,7 +276,7 @@ static int is_gps_positioned(const unsigned char *status_bytes) {
     
     // Check bit 4 of first status byte (GPS positioning status)
     // 0 = GPS not positioned, 1 = GPS positioned
-    return (status_bytes[0] & 0x08) != 0;
+    return (status_bytes[0] & 0x10) != 0;
 }
 
 static void convert_coordinates_to_degrees(uint32_t raw_lat, uint32_t raw_lon, 

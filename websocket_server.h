@@ -4,7 +4,6 @@
 #include <openssl/bio.h>   // for Base64
 #include <openssl/evp.h>   // for Base64
 #include <pthread.h>
-#include "login_map.h"
 #include <unistd.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -20,6 +19,7 @@
 #include <netinet/in.h> 
 #include <openssl/buffer.h>
 #include "json_writer.h"
+#include "database.h"
 #define WS_PORT 8082
 #define WS_MAX_EVENTS 1000
 #define WS_BUF_SIZE 4096
@@ -43,14 +43,19 @@ typedef enum {
 } WSState;
 
 // WebSocket connection structure
-typedef struct {
+typedef struct WSConnection {
     int fd;
     char imei[32];
     int has_imei;
+    char device_id[32];
+    int has_device_id;
     WSState state;
+    int cleanup_in_progress;
     char *write_buf;
     size_t write_buf_len;
     size_t write_buf_used;
+    struct EventData_W *socket_event_data;
+    int epfd;  // ✅ Add this to store epoll fd
 } WSConnection;
 
 // WebSocket server structure
@@ -61,11 +66,22 @@ typedef struct {
     int running;
 } WSServer;
 
+// Event type identifiers
+#define EVENT_TYPE_SOCKET_W 1
+#define EVENT_TYPE_TIMER_W 2
+
+// Event data structure to distinguish between socket and timer events
+typedef struct EventData_W {
+    WSConnection *ws_conn;
+    int event_type;  // EVENT_TYPE_SOCKET_W or EVENT_TYPE_TIMER_W
+} EventData_W;
+
 // Function declarations
 int websocket_server_init(void);
 void websocket_server_start(void);
 void websocket_server_stop(void);
-int websocket_send_to_imei(const char *imei, const char *data, size_t len);
+int websocket_send_direct(WSConnection *conn, const char *data, size_t len);
+int websocket_send_to_imei_id(const char *imei_id, const char *data, size_t len);
 int websocket_broadcast(const char *data, size_t len);
 
 #endif // WEBSOCKET_SERVER_H

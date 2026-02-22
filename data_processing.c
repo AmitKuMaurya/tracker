@@ -10,6 +10,7 @@
  * @date 2024
  */
 
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,10 +18,11 @@
 #include <time.h>
 #include "data_processing.h"
 #include "gps_data.h"
-#include "login_map.h"
+#include "hashmap.h"
 #include "offline_data.h"
 #include "websocket_server.h"
 #include "json_writer.h"
+#include "database.h"
 /* Constants */
 #define FRAME_HEADER_SIZE 2
 #define FRAME_TERMINATOR_SIZE 2
@@ -31,6 +33,9 @@ static int extract_frame(Conn *c, int start_pos, int *frame_len);
 static void log_frame_data(const char *frame, int len);
 static unsigned char int_to_bcd(int val);
 void send_time_sync_response(Conn *c);
+const char* timezone_int_to_str(int tz);
+bool set_status_upload_interval(Conn *c, int interval_minutes);
+bool set_location_upload_interval(Conn *c, int interval_seconds);
 /**
  * @brief Process input buffer and extract complete frames
  */
@@ -198,7 +203,7 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
     const unsigned char *imei_bcd = cmd + 4;
     char imei[17]; // 16 digits + null terminator
     int digit_index = 0;
-    
+
     for (int i = 0; i < 8 && digit_index < 16; i++) {
         unsigned char byte = imei_bcd[i];
         unsigned char high = (byte >> 4) & 0x0F;
@@ -216,24 +221,47 @@ void process_login_command(Conn *c, const unsigned char *cmd, int len) {
     // Store last 15 digits of IMEI in connection structure
     int num_digits = digit_index;
     const char *last15 = (num_digits >= 15) ? (imei + (num_digits - 15)) : imei;
-    snprintf(c->login_id, sizeof(c->login_id), "%.15s", last15);
+    snprintf(c->imei_id, sizeof(c->imei_id), "%.15s", last15);
     // we will inform app to device status online
-    char* device_status_msg = device_online_status_json(1);
-    websocket_send_to_imei(c->login_id, device_status_msg, strlen(device_status_msg));
-    free(device_status_msg);
-    c->has_login_id = 1;
-
-    // we set heartbeat interval 30 sec
-    if (set_heartbeat(c, 30)) {
-        printf("DATA_PROC: Heartbeat interval set to 30 seconds for fd=%d\n", c->fd);
+    char* device_status_msg = device_online_status_json(1, c->imei_id, NULL);
+    // Get device_id for this IMEI and send to device_id
+    if (device_status_msg) {
+        websocket_send_to_imei_id(c->imei_id, device_status_msg, strlen(device_status_msg));
+        free(device_status_msg);
     } else {
-        printf("DATA_PROC: Failed to set heartbeat interval for fd=%d\n", c->fd);
+        printf("DATA_PROC: device_status_msg is NULL, skipping WS send\n");
+    }
+    
+    c->has_imei_id = 1;
+
+    // we set status upload interval to 2 minutes (or your desired value)
+    int status_upload_interval = 2; // set to 2 minutes, change as needed
+    if(set_status_upload_interval(c, status_upload_interval)) {
+        printf("DATA_PROC: Status upload interval set to %d minutes for fd=%d\n", status_upload_interval, c->fd);
+    } else {
+        printf("DATA_PROC: Failed to set status upload interval for fd=%d\n", c->fd);
     }
 
-    printf("DATA_PROC: Device login - IMEI: %s, fd: %d\n", c->login_id, c->fd);
+    int location_upload_interval = 200; // set to 200 seconds, change as needed
+    if(set_location_upload_interval(c, location_upload_interval)){
+        printf("DATA_PROC: Location upload interval set to %d seconds for fd=%d\n", location_upload_interval, c->fd);
+    } else {
+        printf("DATA_PROC: Failed to set location upload interval for fd=%d\n", c->fd);
+    }
+
+    printf("DATA_PROC: Device login - IMEI: %s, fd: %d\n", c->imei_id, c->fd);
     
-    // Register device in login map
-    login_map_set(c->login_id, c);
+    // Get device_id from database for this IMEI
+    const char *db_device_id = db_get_device_id(c->imei_id);
+    if (db_device_id && strcmp(db_device_id, "device_id_not_found") != 0) {
+        printf("DATA_PROC: Found device_id %s for IMEI %s\n", db_device_id, c->imei_id);
+    } else {
+        printf("DATA_PROC: No device_id found for IMEI %s, using IMEI as device_id\n", c->imei_id);
+        db_device_id = c->imei_id;  // Fallback to IMEI
+    }
+    
+    // Register device in hashmap with device_id
+    hash_map_set_tcp_connection(c->imei_id, db_device_id, c);
     
     // Send success response: 7878 01 01 0D0A
     unsigned char response[] = {0x78, 0x78, 0x01, 0x01, 0x0D, 0x0A};
@@ -254,7 +282,7 @@ void process_heartbeat_command(Conn *c, const unsigned char *cmd, int len) {
     }
     
     printf("DATA_PROC: Heartbeat from device %s (fd: %d)\n", 
-           c->has_login_id ? c->login_id : "unknown", c->fd);
+           c->has_imei_id ? c->imei_id : "unknown", c->fd);
 
     
     
@@ -314,7 +342,11 @@ bool set_heartbeat(Conn *c, int heartbeat_interval) {
         0x0D, 0x0A        // end
     };
 
-    send(c->fd, heartbeat_cmd, sizeof(heartbeat_cmd), 0);
+    if(send(c->fd, heartbeat_cmd, sizeof(heartbeat_cmd), 0) == sizeof(heartbeat_cmd)) {
+        printf("DATA_PROC: Heartbeat command set action sent successfully\n");
+    } else {
+        printf("DATA_PROC: Failed to send heartbeat command\n");
+    }
     return true;
 }
 
@@ -322,23 +354,104 @@ void process_device_details_command(Conn *c, const unsigned char *cmd, int len) 
     (void)c;
     (void)len;
     // Direct byte extraction - ALREADY GIVES DECIMAL VALUES
-    unsigned char battery_level = cmd[4];
-    unsigned char firmware_version = cmd[5];
-    unsigned char time_zone = cmd[6];
-    unsigned char status_upload_interval = cmd[7];
-    unsigned char signal_strength = cmd[8];
-    
+    int battery_level = cmd[4];
+    //unsigned char firmware_version = cmd[5];
+    //const char* time_zone = timezone_int_to_str(cmd[6]);
+    int status_upload_interval = cmd[7];
+    int signal_strength = cmd[8];
+
     // Print decimal values (what you want)
     printf("[DATAPROC] Device Status (Decimal Values):\n");
-    printf("  - Battery Level: %d%%\n", battery_level);           // Will print: 75%
-    printf("  - Firmware Version: %d\n", firmware_version);      // Will print: 42
-    printf("  - Time Zone: GMT+%d\n", time_zone);               // Will print: GMT+5
+    printf("  - Battery Level: %d\n", battery_level);           // Will print: 75%
+    //printf("  - Firmware Version: %d\n", firmware_version);      // Will print: 42
+    //printf("  - Time Zone: %s\n", time_zone);               // Will print: GMT+5
     printf("  - Upload Interval: %d minutes\n", status_upload_interval); // Will print: 10 minutes
-    printf("  - Signal Strength: %d%%\n", signal_strength);     // Will print: 64%
+    printf("  - Signal Strength: %d\n", signal_strength);     // Will print: 64%
     
-    // If you want to see hex representation (for debugging)
-    printf("[DEBUG] Hex representation:\n");
-    printf("  - Battery: 0x%02X\n", battery_level);             // Will print: 0x4B
-    printf("  - Firmware: 0x%02X\n", firmware_version);         // Will print: 0x2A
+    char* device_details_msg = device_details_json(battery_level,status_upload_interval,signal_strength,c->imei_id);
+    if (!device_details_msg) {
+        printf("DATA_PROC: Failed to create device details JSON message\n");
+        return;
+    }
+    
+    // Get device_id for this IMEI and send to device_id
+    websocket_send_to_imei_id(c->imei_id, device_details_msg, strlen(device_details_msg));
+    free(device_details_msg);
+
+    if(send(c->fd, cmd, len, 0)==len){
+        printf("DATA_PROC: Echoed back command to device successfully\n");
+    } else {
+        printf("DATA_PROC: Failed to echo back command to device\n");
+    }
+
+    
 }
+
+const char* timezone_int_to_str(int tz) {
+    static char result[16];
+
+    int hours = tz & 0x0F;             // low nibble = hours
+    int high  = (tz >> 4) & 0x0F;      // high nibble
+
+    int quarter = (high >> 1) & 0x07;  // quarter-hour steps (0–7)
+    int minutes = quarter * 15;        // 0,15,30,45,...
+    int sign    = (high & 1) ? -1 : 1; // LSB = sign
+
+    if (minutes == 0)
+        snprintf(result, sizeof(result), "GMT%c%d",
+                 (sign == 1 ? '+' : '-'), hours);
+    else
+        snprintf(result, sizeof(result), "GMT%c%d:%02d",
+                 (sign == 1 ? '+' : '-'), hours, minutes);
+
+    return result;
+}
+
+
+bool set_status_upload_interval(Conn *c, int interval_minutes) {
+    if (!c) return false;
+    if (interval_minutes < 0 || interval_minutes > 255) return false; // valid range
+
+    unsigned char status_cmd[7] = {
+        0x78, 0x78,       // start
+        0x02,             // length (fixed for this cmd)
+        0x13,             // protocol number (status interval)
+        (unsigned char)interval_minutes, // interval time in minutes
+        0x0D, 0x0A        // end
+    };
+
+    int result = send(c->fd, status_cmd, sizeof(status_cmd), 0) == sizeof(status_cmd);
+    if(result) {
+        printf("DATA_PROC: Status upload interval command sent successfully\n");
+    } else {
+        printf("DATA_PROC: Failed to send status upload interval command\n");
+    }
+
+    return result;
+}
+
+bool set_location_upload_interval(Conn *c, int interval_seconds) {
+    if (!c) return false;
+    if (interval_seconds < 0 || interval_seconds > 255) return false; // valid range
+
+    int high = (interval_seconds >> 8) & 0x0F; // high nibble
+    int low  = interval_seconds & 0x0F;        // low nibble
+    unsigned char location_cmd[8] = {
+        0x78, 0x78,       // start
+        0x03,             // length (fixed for this cmd)
+        0x97,             // protocol number (status interval)
+        high, low,       // interval time in seconds
+        0x0D, 0x0A        // end
+    };
+    int result = send(c->fd, location_cmd, sizeof(location_cmd), 0) == sizeof(location_cmd);
+    if(result) {
+        printf("DATA_PROC: Location upload interval command sent successfully\n");
+    } else {
+        printf("DATA_PROC: Failed to send location upload interval command\n");
+    }
+    return result;
+}
+ 
+
+
 

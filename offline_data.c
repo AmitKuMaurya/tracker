@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 /**
  * @file offline_data.c
  * @brief LBS (Location Based Services) data processing module
@@ -20,6 +21,7 @@
 #include "json_writer.h"
 #include "lbs_latlong.h"
 #include "websocket_server.h"
+#include "hashmap.h"
 
 /* Constants and Data Structures are now defined in offline_data.h */
 
@@ -374,20 +376,33 @@ int write_lbs_json(Conn *c, const LBSData *data) {
  * @param data LBS data structure to clean up
  */
 void cleanup_lbs_data(LBSData *data) {
-    if (data) {
-        if (data->unique_cells) {
-            free(data->unique_cells);
-            data->unique_cells = NULL;
-        }
-        if (data->unique_wifis) {
-            free(data->unique_wifis);
-            data->unique_wifis = NULL;
-        }
-        if (data->location) {
-            free(data->location);
-            data->location = NULL;
-        }
+    if (!data) return;
+
+    // Free unique cell tower array
+    // CellInfo has no nested pointers (all primitive types)
+    if (data->unique_cells) {
+        free(data->unique_cells);
+        data->unique_cells = NULL;
+        data->unique_lbs_count = 0;  // Reset count for safety
     }
+
+    // Free unique WiFi access point array
+    // WiFiInfo has no nested pointers (mac is fixed array)
+    if (data->unique_wifis) {
+        free(data->unique_wifis);
+        data->unique_wifis = NULL;
+        data->unique_wifi_count = 0;  // Reset count for safety
+    }
+
+    // Free location data
+    // LocationData has no nested pointers (all primitive types)
+    if (data->location) {
+        free(data->location);
+        data->location = NULL;
+    }
+
+    // Note: All other fields in LBSData are primitive types (int, unsigned char)
+    // They don't need explicit freeing
 }
 
 /**
@@ -409,7 +424,7 @@ int send_lbs_device_response(Conn *c, const unsigned char *cmd) {
         0x0D, 0x0A
     };
     
-    ssize_t bytes_sent = send(c->fd, response, sizeof(response), 0);
+    ssize_t bytes_sent = send(c->fd, response, sizeof(response), 0); //here we sending response to device
     if (bytes_sent != sizeof(response)) {
         printf("%s Warning: Failed to send complete response (%zd/%zu bytes)\n", 
                LOG_PREFIX, bytes_sent, sizeof(response));
@@ -436,21 +451,28 @@ void lbs_command(Conn *c, const unsigned char *cmd, int len) {
     
     // Validate command
     if (validate_command_length(cmd, len) != 0) {
+        printf("%s LBS command validation failed\n", LOG_PREFIX);
+        cleanup_lbs_data(&data);
         return;
     }
     
     // Parse WiFi data
     if (parse_wifi_data(cmd, len, &data) != 0) {
+        printf("%s LBS WiFi data parsing failed\n", LOG_PREFIX);
+        cleanup_lbs_data(&data);
         return;
     }
     
     // Parse datetime
     if (parse_datetime(cmd, &data) != 0) {
+        printf("%s LBS datetime parsing failed\n", LOG_PREFIX);
+        cleanup_lbs_data(&data);
         return;
     }
     
     // Parse LBS data
     if (parse_lbs_data(cmd, len, &data) != 0) {
+        printf("%s LBS base station data parsing failed\n", LOG_PREFIX);
         cleanup_lbs_data(&data);
         return;
     }
@@ -459,23 +481,46 @@ void lbs_command(Conn *c, const unsigned char *cmd, int len) {
     if (lbs_query_google(&data) == 0 && data.location && data.location->is_resolved) {
         printf("%s LBS resolved lat/lon: %.6f, %.6f, accuracy: %.1fm\n", 
                LOG_PREFIX, data.location->lat, data.location->lon, data.location->accuracy_m);
+        // Format values as strings for database insertion
+        char lat_str[32];
+        char lon_str[32];
+        char accuracy_str[32];
+        snprintf(lat_str, sizeof(lat_str), "%.6f", data.location->lat);
+        snprintf(lon_str, sizeof(lon_str), "%.6f", data.location->lon);
+        snprintf(accuracy_str, sizeof(accuracy_str), "%.1f", data.location->accuracy_m);
+
+        // sending data to database
+        if (db_push_device_location(
+                c->imei_id,
+                lat_str,
+                lon_str,
+                accuracy_str,
+                "LBS"
+            ) == 0) {
+            printf("%s LBS location pushed to database for IMEI: %s\n", 
+                   LOG_PREFIX, c->imei_id);
+        } else {
+            printf("%s Failed to push LBS location to database for IMEI: %s\n", 
+                   LOG_PREFIX, c->imei_id);
+        }
         
         // Send location data to WebSocket clients with matching IMEI
-        if (c && c->has_login_id) {
-            char *ws_message = create_websocket_lbs_message(c->login_id, &data);
+        if (c && c->has_imei_id) {
+            char *ws_message = create_websocket_lbs_message(c->imei_id, &data);
             if (ws_message) {
-                int sent_count = websocket_send_to_imei(c->login_id, ws_message, strlen(ws_message));
+                // Get device_id for this IMEI and send to device_id
+                int sent_count = websocket_send_to_imei_id(c->imei_id, ws_message, strlen(ws_message));
                 if (sent_count > 0) {
                     printf("%s Sent LBS location to %d WebSocket client(s) for IMEI: %s\n", 
-                           LOG_PREFIX, sent_count, c->login_id);
+                           LOG_PREFIX, sent_count, c->imei_id);
                 } else {
                     printf("%s No WebSocket clients found for IMEI: %s\n", 
-                           LOG_PREFIX, c->login_id);
+                           LOG_PREFIX, c->imei_id);
                 }
                 free(ws_message);
             } else {
                 printf("%s Failed to create WebSocket message for IMEI: %s\n", 
-                       LOG_PREFIX, c->login_id);
+                       LOG_PREFIX, c->imei_id);
             }
         }
     } else {

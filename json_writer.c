@@ -1,8 +1,11 @@
+#define _GNU_SOURCE
 #include "json_writer.h"
 #include "offline_data.h"
 #include "gps_data.h"
 #include <string.h>
 #include <stdlib.h>
+#include <pthread.h>
+#include "hashmap.h"
 
 cJSON* create_lbs_json_object(void *c, const void *data) {
     const LBSData *lbs_data = (const LBSData *)data;
@@ -17,8 +20,8 @@ cJSON* create_lbs_json_object(void *c, const void *data) {
     }
     
     // Add device info
-    if (conn && conn->has_login_id) {
-        cJSON_AddStringToObject(json, "device_id", conn->login_id);
+    if (conn && conn->has_imei_id) {
+        cJSON_AddStringToObject(json, "device_id", conn->imei_id);
     }
     
     // Add datetime from packet
@@ -199,9 +202,12 @@ char* create_websocket_gps_message(const char *imei, const GPSData *gps_data) {
         return NULL;
     }
     
-    // Add message type and device info
+    // Add message type and device info (use device_id instead of IMEI)
     cJSON_AddStringToObject(root, "type", "location");
-    cJSON_AddStringToObject(root, "imei", imei);
+    
+    // Get device_id from IMEI (hide IMEI from client)
+    const char *device_id = hash_map_get_device_id(imei);
+    cJSON_AddStringToObject(root, "device_id", device_id ? device_id : imei);
     
     // Add timestamp
     char timestamp[32];
@@ -210,9 +216,13 @@ char* create_websocket_gps_message(const char *imei, const GPSData *gps_data) {
              gps_data->hour, gps_data->minute, gps_data->second);
     cJSON_AddStringToObject(root, "timestamp", timestamp);
     
-    // Add location data
-    cJSON_AddNumberToObject(root, "latitude", gps_data->latitude);
-    cJSON_AddNumberToObject(root, "longitude", gps_data->longitude);
+    // Add location data with controlled precision
+    char lat_str[32], lon_str[32];
+    snprintf(lat_str, sizeof(lat_str), "%.6f", gps_data->latitude);
+    snprintf(lon_str, sizeof(lon_str), "%.6f", gps_data->longitude);
+    
+    cJSON_AddStringToObject(root, "latitude", lat_str);
+    cJSON_AddStringToObject(root, "longitude", lon_str);
     cJSON_AddNumberToObject(root, "accuracy", 10.0); // GPS typically has ~10m accuracy
     
     // Add GPS-specific data
@@ -293,9 +303,12 @@ char* create_websocket_lbs_message(const char *imei, const LBSData *lbs_data) {
         return NULL;
     }
     
-    // Add message type and device info
+    // Add message type and device info (use device_id instead of IMEI)
     cJSON_AddStringToObject(root, "type", "location");
-    cJSON_AddStringToObject(root, "imei", imei);
+    
+    // Get device_id from IMEI (hide IMEI from client)
+    const char *device_id = hash_map_get_device_id(imei);
+    cJSON_AddStringToObject(root, "device_id", device_id ? device_id : imei);
     
     // Add timestamp
     char timestamp[32];
@@ -310,7 +323,11 @@ char* create_websocket_lbs_message(const char *imei, const LBSData *lbs_data) {
     cJSON_AddNumberToObject(root, "accuracy", lbs_data->location->accuracy_m);
     
     // Add source information
-    cJSON_AddStringToObject(root, "source", "lbs");
+    if(lbs_data->wifi_count > 0){
+        cJSON_AddStringToObject(root, "source", "WIFI_LBS");
+    } else {
+        cJSON_AddStringToObject(root, "source", "LBS");
+    }
     cJSON_AddNumberToObject(root, "cell_count", lbs_data->unique_lbs_count);
     cJSON_AddNumberToObject(root, "wifi_count", lbs_data->unique_wifi_count);
     
@@ -318,18 +335,124 @@ char* create_websocket_lbs_message(const char *imei, const LBSData *lbs_data) {
     
     char *json_string = cJSON_Print(root);
     cJSON_Delete(root);
-    
+    printf("yaha dikkat nahi hai bhai");
+    printf("LBS WebSocket JSON: %s\n", json_string);
     return json_string;
 }
 
-char* device_online_status_json(int is_online){
+char* device_online_status_json(int is_online, const char* imei, const char* device_id) {
+    // Input validation
+    if (!imei && !device_id) {
+        printf("JSON_WRITER: Both IMEI and device_id are NULL\n");
+        return NULL;
+    }
+    
+    // Check for empty strings (with NULL safety)
+    int has_imei = (imei && strlen(imei) > 0);
+    int has_device_id = (device_id && strlen(device_id) > 0);
+    
+    if (!has_imei && !has_device_id) {
+        printf("JSON_WRITER: Both IMEI and device_id are empty\n");
+        return NULL;
+    }
+    
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        printf("JSON_WRITER: Failed to create JSON object\n");
+        return NULL;
+    }
+    
+    // Determine which device_id to use
+    const char *final_device_id = NULL;
+    
+    if (has_device_id) {
+        // Use provided device_id parameter
+        final_device_id = device_id;
+        printf("JSON_WRITER: Using provided device_id: %s\n", final_device_id);
+    } else if (has_imei) {
+        // Look up device_id from IMEI
+        const char *looked_up_device_id = hash_map_get_device_id(imei);
+        if (looked_up_device_id && strlen(looked_up_device_id) > 0) {
+            final_device_id = looked_up_device_id;
+            printf("JSON_WRITER: Found device_id for IMEI %s: %s\n", imei, final_device_id);
+        } else {
+            printf("JSON_WRITER: No device_id found for IMEI %s\n", imei);
+            cJSON_Delete(root);
+            return NULL;
+        }
+    }
+    
+    // Add fields to JSON
+    if (final_device_id) {
+        if (!cJSON_AddStringToObject(root, "device_id", final_device_id)) {
+            printf("JSON_WRITER: Failed to add device_id to JSON\n");
+            cJSON_Delete(root);
+            return NULL;
+        }
+    }
+    
+    if (!cJSON_AddStringToObject(root, "type", "device_status")) {
+        printf("JSON_WRITER: Failed to add type to JSON\n");
+        cJSON_Delete(root);
+        return NULL;
+    }
+    
+    if (!cJSON_AddNumberToObject(root, "status", is_online)) {
+        printf("JSON_WRITER: Failed to add status to JSON\n");
+        cJSON_Delete(root);
+        return NULL;
+    }
+    
+    
+    // Generate JSON string
+    char *json_string = cJSON_Print(root);
+    cJSON_Delete(root);
+    
+    if (!json_string) {
+        printf("JSON_WRITER: Failed to serialize JSON to string\n");
+        return NULL;
+    }
+    
+    printf("JSON_WRITER: Generated status JSON: %s\n", json_string);
+    return json_string;  // Caller must free() this string
+}
+
+
+char* device_details_json(int battery,int upload_interval,int signal_strength,const char* imei){
     cJSON *root = cJSON_CreateObject();
     if (!root) {
         return NULL;
     }
+    const char *device_id = hash_map_get_device_id(imei);
+    if(device_id){
+        cJSON_AddStringToObject(root, "device_id", device_id);
+    } else {
+        cJSON_AddStringToObject(root, "device_id", "unknown");
+    }
+    cJSON_AddStringToObject(root, "type", "device_details");
+    cJSON_AddNumberToObject(root, "battery", battery);
+    cJSON_AddNumberToObject(root, "upload_interval", upload_interval);
+    cJSON_AddNumberToObject(root, "signal_strength", signal_strength);
+    
+    char *json_string = cJSON_Print(root);
+    cJSON_Delete(root);
 
-    cJSON_AddStringToObject(root, "type", "device_status");
-    cJSON_AddNumberToObject(root, "status", is_online);
+    return json_string;
+
+}
+
+char* device_validation_json(const char* device_id, int is_valid){
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        return NULL;
+    }
+    if(device_id){
+        cJSON_AddStringToObject(root, "device_id", device_id);
+    } else {
+        cJSON_AddStringToObject(root, "device_id", "unknown");
+    }
+    cJSON_AddStringToObject(root, "type", "device_validation");
+    cJSON_AddNumberToObject(root, "is_valid", is_valid);
     
     char *json_string = cJSON_Print(root);
     cJSON_Delete(root);
